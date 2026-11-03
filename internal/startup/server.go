@@ -37,12 +37,8 @@ func startWithLogging(ctx context.Context, lookup func(string) (string, bool), c
 
 // startWithComponents 管理配置、可选探针、RPC 和日志的生命周期，任何失败路径均释放已启动资源。
 func startWithComponents(ctx context.Context, lookup func(string) (string, bool), create serverFactory, logging *Logging, probing *Probing, registrations ...Registration) (err error) {
-	state := lifecycle.New(probing != nil)
-	defer func() { state.Finish(err) }()
-	if probing != nil && probing.err != nil {
-		return probing.err
-	}
 	var configure func([]byte) error
+	var state *lifecycle.State
 	if logging != nil {
 		if logging.err != nil {
 			return logging.err
@@ -51,14 +47,31 @@ func startWithComponents(ctx context.Context, lookup func(string) (string, bool)
 		defer func() {
 			if closeErr := logging.close(); closeErr != nil {
 				err = errors.Join(err, fmt.Errorf("core: close logger: %w", closeErr))
+				state.Finish(err)
 			}
 		}()
 		configure = logging.configure()
 	}
+	serviceName, _ := config.ServiceName(lookup)
+	state = lifecycle.New(serviceName, probing != nil)
+	defer func() { state.Finish(err) }()
+	if probing != nil && probing.err != nil {
+		return probing.err
+	}
 	var configureProbe func([]byte) error
 	if probing != nil {
+		if named, ok := probing.controller.(interface{ SetServiceName(string) }); ok {
+			named.SetServiceName(serviceName)
+		}
 		configureProbe = probing.controller.ConfigureProbe
-		defer func() { state.Stop(); err = errors.Join(err, probing.controller.Close()) }()
+		defer func() {
+			if err != nil {
+				state.Finish(err)
+			} else {
+				state.Stop()
+			}
+			err = errors.Join(err, probing.controller.Close())
+		}()
 	}
 	settings, err := config.LoadWithComponents(ctx, lookup, configure, configureProbe)
 	if err != nil {
@@ -98,13 +111,14 @@ func newServer(settings config.Settings, options ...server.Option) server.Server
 }
 
 // run 校验全部注册项，按顺序注册到同一 Server，并在运行结束后停止 Server。
-func run(create func() server.Server, registrations ...Registration) error {
-	return runWithState(create, lifecycle.New(false), registrations...)
+func run(create func() server.Server, registrations ...Registration) (err error) {
+	state := lifecycle.New("", false)
+	defer func() { state.Finish(err) }()
+	return runWithState(create, state, registrations...)
 }
 
 // runWithState 先校验并注册全部业务服务，终止状态在 RPC 清理前生效且不可被后台检查覆盖。
 func runWithState(create func() server.Server, state *lifecycle.State, registrations ...Registration) (err error) {
-	defer func() { state.Finish(err) }()
 	if len(registrations) == 0 {
 		return errors.New("core: at least one Service is required")
 	}

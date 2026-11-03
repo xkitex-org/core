@@ -1,6 +1,10 @@
 package lifecycle
 
-import "sync"
+import (
+	"sync"
+
+	"github.com/cloudwego/kitex/pkg/klog"
+)
 
 // Phase 表示单个 Server 的生命周期，不等同于是否允许发现和分配流量。
 type Phase string
@@ -17,13 +21,34 @@ const (
 type State struct {
 	mu      sync.RWMutex
 	phase   Phase
+	service string
 	gated   bool
 	started bool
 	ready   bool
 }
 
 // New 创建初始不可用状态；未接探针的实例在框架运行通知后直接允许使用。
-func New(gated bool) *State { return &State{phase: Starting, gated: gated} }
+func New(service string, gated bool) *State {
+	if service == "" {
+		service = "未确定"
+	}
+	s := &State{service: service, gated: gated}
+	s.changePhase(Starting)
+	return s
+}
+
+// changePhase 在持锁或构造期间按顺序记录实际状态变化，不重复输出相同阶段。
+func (s *State) changePhase(next Phase) {
+	if s.phase == next {
+		return
+	}
+	previous := string(s.phase)
+	if previous == "" {
+		previous = "None"
+	}
+	s.phase = next
+	klog.Infof("core: 实例生命周期变化：service=[%s] from=[%s] to=[%s]", s.service, previous, next)
+}
 
 // Phase 返回只读阶段，供独立探针模块读取。
 func (s *State) Phase() string { s.mu.RLock(); defer s.mu.RUnlock(); return string(s.phase) }
@@ -39,7 +64,7 @@ func (s *State) Run() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.phase == Starting {
-		s.phase = Running
+		s.changePhase(Running)
 	}
 }
 
@@ -48,7 +73,7 @@ func (s *State) Stop() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.phase == Starting || s.phase == Running {
-		s.phase = Stopping
+		s.changePhase(Stopping)
 		s.ready = false
 	}
 }
@@ -59,9 +84,9 @@ func (s *State) Finish(err error) {
 	defer s.mu.Unlock()
 	s.ready = false
 	if err != nil || s.phase == Failed {
-		s.phase = Failed
+		s.changePhase(Failed)
 	} else {
-		s.phase = Stopped
+		s.changePhase(Stopped)
 	}
 }
 

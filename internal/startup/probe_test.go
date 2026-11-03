@@ -19,12 +19,16 @@ import (
 // testProbe 记录配置隔离和资源顺序，检查本身由独立 probe 模块测试。
 type testProbe struct {
 	body                        []byte
+	serviceName                 string
 	configured, started, closed int
 	configErr, startErr         error
 	phase                       func() string
 	report                      func(bool, bool)
 	fatal                       chan error
 }
+
+// SetServiceName 记录可选日志身份协议收到的已校验服务名。
+func (p *testProbe) SetServiceName(name string) { p.serviceName = name }
 
 // ConfigureProbe 记录 probe 节。
 func (p *testProbe) ConfigureProbe(body []byte) error {
@@ -56,7 +60,7 @@ func TestProbeSectionAndLifecycleIsolation(t *testing.T) {
 	var state *lifecycle.State
 	err := startWithComponents(context.Background(), configEnvironment(consul.URL), func(_ config.Settings, s *lifecycle.State, _ <-chan error) server.Server {
 		state = s
-		if p.started != 1 || p.phase() != "Starting" || s.Available() {
+		if p.serviceName != "demo-api" || p.started != 1 || p.phase() != "Starting" || s.Available() {
 			t.Fatal("wrong initial lifecycle")
 		}
 		s.Run()
@@ -103,7 +107,7 @@ func TestProbeFailurePreventsRPCAndStillCloses(t *testing.T) {
 
 // TestProbeFatalSignalRevokesAvailability 验证探针服务故障先撤销可用性，再通知 Kitex 退出。
 func TestProbeFatalSignalRevokesAvailability(t *testing.T) {
-	state := lifecycle.New(true)
+	state := lifecycle.New("demo-api", true)
 	state.Run()
 	state.Report(true, true)
 	ctx, exit, start, cleanup := supervise(context.Background(), state)

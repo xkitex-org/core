@@ -13,6 +13,15 @@ type identity struct {
 	key  string
 }
 
+// ServiceName 返回经过校验的应用服务名，供配置读取前的实例日志使用。
+func ServiceName(lookup func(string) (string, bool)) (string, error) {
+	if lookup == nil {
+		return "", fmt.Errorf("core: environment reader is nil")
+	}
+	id, err := loadIdentity(lookup)
+	return id.name, err
+}
+
 // loadIdentity 校验服务分组和名称，并生成应用服务名及固定配置 Key。
 func loadIdentity(lookup func(string) (string, bool)) (identity, error) {
 	values := make([]string, 2)

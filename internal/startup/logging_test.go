@@ -40,7 +40,7 @@ func (l *lifecycleLogger) ConfigureLogging(body []byte) error {
 // Close 验证退出日志先于资源关闭，并记录关闭次数。
 func (l *lifecycleLogger) Close() error {
 	l.closed++
-	l.closedAfterFinalLog = strings.Contains(l.output.String(), "服务已停止")
+	l.closedAfterFinalLog = strings.Contains(l.output.String(), "服务已停止") && strings.Contains(l.output.String(), "to=[Stopped]")
 	return l.closeErr
 }
 

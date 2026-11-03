@@ -136,3 +136,19 @@ core 先应用 logging 节，再应用 probe 节；两个回调都只收到各�
 未来服务注册应消费此可用性：接入探针的实例先登记为不可用，再应用最新检查结果，readiness 恢复时更新同一实例，正常停机时注销。此处没有实现该注册驱动。
 
 本轮生命周期与可选探针能力通过正式 v0.0.1 模块依赖接入。调用样例和 probe 配置说明见相邻 probe 模块的 README。
+
+
+### 生命周期日志
+
+所有实例生命周期变化通过 Kitex klog 输出，包含已校验的应用服务名、上一阶段和当前阶段。首次记录 `None → Starting`，正常运行记录 `Starting → Running → Stopping → Stopped`，错误路径记录实际进入的 `Failed`；重复通知不重复输出，终止后不接受迟到的运行通知。身份环境变量非法时使用 `service=[未确定]`，不回显非法原值。
+
+```text
+core: 实例生命周期变化：service=[zmall-product] from=[None] to=[Starting]
+core: 实例生命周期变化：service=[zmall-product] from=[Starting] to=[Running]
+core: 实例生命周期变化：service=[zmall-product] from=[Running] to=[Stopping]
+core: 实例生命周期变化：service=[zmall-product] from=[Stopping] to=[Stopped]
+```
+
+正常 `Stopped` 在 RPC 和 probe 清理完成后、日志资源关闭前输出；后续日志关闭失败会再记录 `Failed`。core 通过可选的 `SetServiceName(string)` 协议将服务名传给 probe，不更改既有 Start 协议，也不向 probe 配置混入其他配置节。既有自定义 Probe 实现不必新增该方法。
+
+startup、readiness、liveness 由 probe 分别记录状态变化及检查项数量，不再只输出 `available`。无 probe 时仍记录实例生命周期，不伪造探针检查结果。

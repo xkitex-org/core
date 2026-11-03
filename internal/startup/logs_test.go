@@ -46,6 +46,16 @@ func TestServiceLogsDistinguishPreparationRegistrationAndExit(t *testing.T) {
 			}
 			_ = start(context.Background(), configEnvironment(consul.URL), func(config.Settings) server.Server { return s }, registration("ProductService"), registration("CategoryService"))
 			logs := output.String()
+			if !strings.Contains(logs, "service=[demo-api] from=[None] to=[Starting]") {
+				t.Fatal("missing named initial lifecycle")
+			}
+			terminal := "Stopped"
+			if tc.runErr != nil || tc.name == "configuration failure" {
+				terminal = "Failed"
+			}
+			if !strings.Contains(logs, "to=["+terminal+"]") || strings.Contains(logs, "服务可用性变化") {
+				t.Fatal("missing final lifecycle or obsolete aggregate log")
+			}
 			if !strings.Contains(logs, tc.want) {
 				t.Fatalf("missing expected startup stage: %s", tc.want)
 			}

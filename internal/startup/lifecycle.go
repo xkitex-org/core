@@ -7,7 +7,6 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/cloudwego/kitex/pkg/klog"
 	"github.com/cloudwego/kitex/pkg/registry"
 	"github.com/cloudwego/kitex/server"
 	"go.chaoxizhongzhi.com/xkitex/core/internal/config"
@@ -61,9 +60,7 @@ func supervise(parent context.Context, state *lifecycle.State) (context.Context,
 	return ctx, exit, start, cleanup
 }
 
-// reportProbe 汇总每个实例的可用性变化，只在变化时记录日志，避免定时检查刷屏。
+// reportProbe 保存实例的就绪依据；各探针状态由 probe 分别记录，不再仅输出汇总可用性。
 func reportProbe(state *lifecycle.State, started, ready bool) {
-	if state.Report(started, ready) {
-		klog.Infof("core: 服务可用性变化：available=[%t]", state.Available())
-	}
+	state.Report(started, ready)
 }
