@@ -1,6 +1,6 @@
-# core
+# core：服务启动与配置
 
-独立 Go module：`go.chaoxizhongzhi.com/xkitex/core`，对外 Go 包名为 `x`，Kitex v0.16.4。业务直接导入，无需别名。
+独立 Go 模块：`go.chaoxizhongzhi.com/xkitex/core`，对外 Go 包名为 `x`，Kitex v0.16.4。业务直接导入，无需别名。
 
 ```go
 import "go.chaoxizhongzhi.com/xkitex/core"
@@ -52,7 +52,7 @@ database:
     username: application
 ```
 
-最终数据库配置的 host 为 `application-database.internal`，port 和 username 保留共享值。当前 core 只消费合并后的 service.port，其他配置节参与加载和合并，不增加业务配置的公共读取 API。
+最终数据库配置的 host 为 `application-database.internal`，port 和 username 保留共享值。core 直接使用合并后的 `service.port`；显式传入且支持配置的日志实现接收 `logging` 节。其余配置节参与加载和合并，当前不增加业务配置的公共读取接口。
 
 - imports 可省略或设置为空列表；存在时必须是字符串列表，仅接受 `config/` 下的明确 Key，不支持本地文件、URL、相对路径和通配符。
 - 入口及每个引用 Key 在启动期间各读取一次，同一启动过程共用 SDK 客户端和 ACL Token；不扫描目录、不建立监听。
@@ -72,7 +72,7 @@ database:
 配置[database.postgres.host]已被[config/zmall/product/application.yaml]覆盖。
 ```
 
-未传 `WithLogger` 时，core 不修改现有 klog Logger、输出或级别，也不调用其配置、关闭或刷新方法。
+未传 `WithLogger` 时，core 不修改现有 klog 日志实现、输出或级别，也不调用其配置、关闭或刷新方法。
 
 启动期间同样使用 Kitex `klog` 输出以下信息：校验后的实际 Consul 协议和地址、派生服务名、固定入口 Key，每个入口或引用文件开始读取及 YAML 解析成功、文件合并数量、最终端口及其生效文件（缺省时标记默认值），随后记录准备监听的地址及已注册的 IDL Service 名称。配置加载失败使用 Error 日志记录安全错误，并终止启动；失败时不输出服务配置生效。文件读取并解析成功仅表示该文件通过 YAML 解析，全部合并、端口校验和可选日志配置成功后才输出服务配置生效。
 
@@ -88,7 +88,7 @@ Consul ACL 可让研发只修改入口、由管理员维护共享文件；应用
 
 ## 注册与包边界
 
-Handler 由应用创建。WithService 绑定生成的 RegisterService 函数和 Handler，类型、nil 和选项有效性在执行任何注册前校验。所有 Service 按顺序注册到同一个 Server，全部成功后才监听。没有 Service、空回调、空/错误 Handler、重复 Service 或注册失败均会阻止启动。
+业务处理器由应用创建。WithService 绑定生成的 RegisterService 函数和 Handler，类型、nil 和选项有效性在执行任何注册前校验。所有 Service 按顺序注册到同一个 Server，全部成功后才监听。没有 Service、空回调、空/错误 Handler、重复 Service 或注册失败均会阻止启动。
 
 Server 阻塞运行，返回启动、运行和收尾错误；退出信号和优雅停机由 Kitex 处理。多个 Service 按 IDL Service 名分流，同名方法可以共存。Thrift 客户端需使用 TTHeader 和 transmeta.ClientTTHeaderHandler 传递服务名。
 
@@ -98,6 +98,7 @@ core/
   go.sum
   server.go           # Server、ServerOption
   service.go          # WithService
+  logger.go           # WithLogger
   internal/config/    # 环境校验、固定入口及引用读取、配置合并和端口解析
   internal/startup/   # 注册、底层 Kitex 创建与运行
 ```
