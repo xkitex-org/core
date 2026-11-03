@@ -15,11 +15,12 @@ import (
 	"github.com/cloudwego/kitex/server"
 
 	"go.chaoxizhongzhi.com/xkitex/core/internal/config"
+	"go.chaoxizhongzhi.com/xkitex/core/internal/lifecycle"
 )
 
 // Run 先校验身份并读取固定 Consul 配置，成功后才创建、注册和运行 Server。
-func Run(logging *Logging, registrations ...Registration) error {
-	return startWithLogging(context.Background(), os.LookupEnv, func(settings config.Settings) server.Server { return newServer(settings) }, logging, registrations...)
+func Run(logging *Logging, probing *Probing, registrations ...Registration) error {
+	return startWithComponents(context.Background(), os.LookupEnv, managedServer, logging, probing, registrations...)
 }
 
 // start 先加载启动配置，再使用该配置创建 Server 并执行服务注册和启动。
@@ -28,7 +29,19 @@ func start(ctx context.Context, lookup func(string) (string, bool), create func(
 }
 
 // startWithLogging 按显式选项安装 logger，配置成功后运行服务，并在最后一条退出日志后释放日志资源。
-func startWithLogging(ctx context.Context, lookup func(string) (string, bool), create func(config.Settings) server.Server, logging *Logging, registrations ...Registration) (err error) {
+func startWithLogging(ctx context.Context, lookup func(string) (string, bool), create func(config.Settings) server.Server, logging *Logging, registrations ...Registration) error {
+	return startWithComponents(ctx, lookup, func(settings config.Settings, _ *lifecycle.State, _ <-chan error) server.Server {
+		return create(settings)
+	}, logging, nil, registrations...)
+}
+
+// startWithComponents 管理配置、可选探针、RPC 和日志的生命周期，任何失败路径均释放已启动资源。
+func startWithComponents(ctx context.Context, lookup func(string) (string, bool), create serverFactory, logging *Logging, probing *Probing, registrations ...Registration) (err error) {
+	state := lifecycle.New(probing != nil)
+	defer func() { state.Finish(err) }()
+	if probing != nil && probing.err != nil {
+		return probing.err
+	}
 	var configure func([]byte) error
 	if logging != nil {
 		if logging.err != nil {
@@ -42,12 +55,27 @@ func startWithLogging(ctx context.Context, lookup func(string) (string, bool), c
 		}()
 		configure = logging.configure()
 	}
-	settings, err := config.LoadWithLogging(ctx, lookup, configure)
+	var configureProbe func([]byte) error
+	if probing != nil {
+		configureProbe = probing.controller.ConfigureProbe
+		defer func() { state.Stop(); err = errors.Join(err, probing.controller.Close()) }()
+	}
+	settings, err := config.LoadWithComponents(ctx, lookup, configure, configureProbe)
 	if err != nil {
 		return err
 	}
+	runtimeCtx, exit, watch, cleanup := supervise(ctx, state)
+	defer cleanup()
+	var fatal <-chan error
+	if probing != nil {
+		fatal, err = probing.controller.Start(runtimeCtx, state.Phase, func(started, ready bool) { reportProbe(state, started, ready) })
+		if err != nil {
+			return fmt.Errorf("core: start probe: %w", err)
+		}
+	}
+	watch(fatal)
 	klog.Infof("core: 准备启动服务：name=[%s] listen=[:%d]", settings.ServiceName, settings.Port)
-	err = run(func() server.Server { return create(settings) }, registrations...)
+	err = runWithState(func() server.Server { return create(settings, state, exit) }, state, registrations...)
 	if err != nil {
 		klog.Errorf("core: 服务启动或运行失败：name=[%s] error=[%v]", settings.ServiceName, err)
 	} else {
@@ -70,7 +98,13 @@ func newServer(settings config.Settings, options ...server.Option) server.Server
 }
 
 // run 校验全部注册项，按顺序注册到同一 Server，并在运行结束后停止 Server。
-func run(create func() server.Server, registrations ...Registration) (err error) {
+func run(create func() server.Server, registrations ...Registration) error {
+	return runWithState(create, lifecycle.New(false), registrations...)
+}
+
+// runWithState 先校验并注册全部业务服务，终止状态在 RPC 清理前生效且不可被后台检查覆盖。
+func runWithState(create func() server.Server, state *lifecycle.State, registrations ...Registration) (err error) {
+	defer func() { state.Finish(err) }()
 	if len(registrations) == 0 {
 		return errors.New("core: at least one Service is required")
 	}
@@ -84,6 +118,7 @@ func run(create func() server.Server, registrations ...Registration) (err error)
 		}
 	}
 	s := create()
+	defer func() { state.Stop(); err = errors.Join(err, s.Stop()) }()
 	for i, registration := range registrations {
 		if err := registerService(s, registration.register); err != nil {
 			return fmt.Errorf("core: register service %d: %w", i+1, err)
@@ -99,7 +134,6 @@ func run(create func() server.Server, registrations ...Registration) (err error)
 	}
 	sort.Strings(services)
 	klog.Infof("core: IDL Service 注册完成：services=[%s]", strings.Join(services, ", "))
-	defer func() { err = errors.Join(err, s.Stop()) }()
 	return s.Run()
 }
 

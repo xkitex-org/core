@@ -27,7 +27,12 @@ func Load(ctx context.Context, lookup func(string) (string, bool)) (settings Set
 }
 
 // LoadWithLogging 在全部配置合并和端口校验通过后，仅向显式传入的 logger 下发 logging 节。
-func LoadWithLogging(ctx context.Context, lookup func(string) (string, bool), configure func([]byte) error) (settings Settings, err error) {
+func LoadWithLogging(ctx context.Context, lookup func(string) (string, bool), configure func([]byte) error) (Settings, error) {
+	return LoadWithComponents(ctx, lookup, configure, nil)
+}
+
+// LoadWithComponents 向显式接入的日志和探针实现单次传入各自合并配置，不暴露其他配置节。
+func LoadWithComponents(ctx context.Context, lookup func(string) (string, bool), configureLogging, configureProbe func([]byte) error) (settings Settings, err error) {
 	defer func() {
 		if err != nil {
 			klog.Errorf("core: 配置加载失败：%v", err)
@@ -66,16 +71,24 @@ func LoadWithLogging(ctx context.Context, lookup func(string) (string, bool), co
 	if err != nil {
 		return Settings{}, fmt.Errorf("core: configuration %q: %w", id.key, err)
 	}
-	if configure != nil {
+	for _, component := range []struct {
+		name      string
+		configure func([]byte) error
+	}{
+		{"logging", configureLogging}, {"probe", configureProbe},
+	} {
+		if component.configure == nil {
+			continue
+		}
 		var body []byte
-		if value, exists := application.values["logging"]; exists {
+		if value, exists := application.values[component.name]; exists {
 			body, err = yaml.Marshal(value)
 			if err != nil {
-				return Settings{}, fmt.Errorf("core: encode logging configuration failed")
+				return Settings{}, fmt.Errorf("core: encode %s configuration failed", component.name)
 			}
 		}
-		if err := configure(body); err != nil {
-			return Settings{}, fmt.Errorf("core: configure logging: %w", err)
+		if err := component.configure(body); err != nil {
+			return Settings{}, fmt.Errorf("core: configure %s: %w", component.name, err)
 		}
 	}
 	application.logOverrides()

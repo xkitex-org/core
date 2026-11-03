@@ -103,7 +103,7 @@ core/
   internal/startup/   # 注册、底层 Kitex 创建与运行
 ```
 
-根包只公开 Server、WithService、WithLogger、ServerOption。ServerOption 没有公开字段或方法，零值无效。公开 Handler 参数为 any，兼容注册函数接收 IDL 接口、应用传入具体指针的形式；错误类型会在启动前返回。internal 实现不能由外部业务项目直接导入。
+根包公开 Server、WithService、WithLogger、WithProbe，以及 ServerOption 和必要的 Probe 接入协议。ServerOption 没有公开字段或方法，零值无效。公开 Handler 参数为 any，兼容注册函数接收 IDL 接口、应用传入具体指针的形式；错误类型会在启动前返回。internal 实现不能由外部业务项目直接导入。
 
 ## 显式日志接入
 
@@ -122,3 +122,17 @@ GOWORK=off GOTOOLCHAIN=local go build ./...
 ```
 
 测试使用模拟 Consul HTTP 服务和本机临时端口，不依赖真实 Consul 数据。xkitex 上层目录没有 go.mod、go.work 或 replace。
+
+## 生命周期与可选探针
+
+通过 `x.WithProbe(probe.New())` 显式接入独立 probe 模块。不传时不读取 probe 配置、不启动 HTTP、不等待健康检查；当前依然没有外部服务注册行为，未来注册模块可在原有框架注册位置直接登记为可用。
+
+每个 Server 内独立维护 Starting、Running、Stopping、Stopped、Failed 阶段，以及独立的可用性。Running 仅表示框架运行阶段；接探针时，还需启动检查和就绪检查通过才能 Available。启动完成单向锁存，就绪可失败及恢复。Stopping、Stopped、Failed 始终不可用，不能被迟到的检查或启动通知覆盖。
+
+本实现通过 Kitex 按实例的 Registry 扩展回调观察运行与排空阶段，回调内部不访问注册中心，保留 Kitex 原有约一秒的内部回调时机，没有额外健康等待。没有使用包级全局启动或停机钩子。收到 SIGINT/SIGTERM 时先标记 Stopping，再通过每实例退出通道交给 Kitex 原生排空；探针 HTTP 自身故障标记 Failed 后触发清理。
+
+core 先应用 logging 节，再应用 probe 节；两个回调都只收到各自合并后的 YAML。探针先同步绑定独立 HTTP 端口，再创建及运行 RPC；失败时不继续启动 RPC。正常运行期间，core 只接收后台报告，不通过 HTTP 反向轮询自己。
+
+未来服务注册应消费此可用性：接入探针的实例先登记为不可用，再应用最新检查结果，readiness 恢复时更新同一实例，正常停机时注销。此处没有实现该注册驱动。
+
+本轮生命周期与可选探针能力通过正式 v0.0.1 模块依赖接入。调用样例和 probe 配置说明见相邻 probe 模块的 README。
