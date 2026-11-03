@@ -18,13 +18,31 @@ import (
 )
 
 // Run 先校验身份并读取固定 Consul 配置，成功后才创建、注册和运行 Server。
-func Run(registrations ...Registration) error {
-	return start(context.Background(), os.LookupEnv, func(settings config.Settings) server.Server { return newServer(settings) }, registrations...)
+func Run(logging *Logging, registrations ...Registration) error {
+	return startWithLogging(context.Background(), os.LookupEnv, func(settings config.Settings) server.Server { return newServer(settings) }, logging, registrations...)
 }
 
 // start 先加载启动配置，再使用该配置创建 Server 并执行服务注册和启动。
 func start(ctx context.Context, lookup func(string) (string, bool), create func(config.Settings) server.Server, registrations ...Registration) error {
-	settings, err := config.Load(ctx, lookup)
+	return startWithLogging(ctx, lookup, create, nil, registrations...)
+}
+
+// startWithLogging 按显式选项安装 logger，配置成功后运行服务，并在最后一条退出日志后释放日志资源。
+func startWithLogging(ctx context.Context, lookup func(string) (string, bool), create func(config.Settings) server.Server, logging *Logging, registrations ...Registration) (err error) {
+	var configure func([]byte) error
+	if logging != nil {
+		if logging.err != nil {
+			return logging.err
+		}
+		klog.SetLogger(logging.logger)
+		defer func() {
+			if closeErr := logging.close(); closeErr != nil {
+				err = errors.Join(err, fmt.Errorf("core: close logger: %w", closeErr))
+			}
+		}()
+		configure = logging.configure()
+	}
+	settings, err := config.LoadWithLogging(ctx, lookup, configure)
 	if err != nil {
 		return err
 	}

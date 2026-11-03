@@ -31,7 +31,6 @@ func TestStartupLogsShowSourceAndSuccessfulStages(t *testing.T) {
 		"配置文件读取并解析成功：key=[config/zmall/shared/base.yaml]",
 		"配置文件合并完成：files=[2] priority=[application.yaml 优先]",
 		"配置[service.port]已被[config/zmall/product/application.yaml]覆盖。",
-		"配置加载完成：mode=[启动时读取一次，不监听变更] elapsed=[",
 		"服务配置生效：name=[zmall-product] port=[9088] port_source=[config/zmall/product/application.yaml]",
 	}
 	previous := -1

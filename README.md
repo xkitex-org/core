@@ -72,11 +72,11 @@ database:
 配置[database.postgres.host]已被[config/zmall/product/application.yaml]覆盖。
 ```
 
-core 不修改 klog 的输出、级别或 Logger，后续由独立日志配置包统一设置。
+未传 `WithLogger` 时，core 不修改现有 klog Logger、输出或级别，也不调用其配置、关闭或刷新方法。
 
-启动期间同样使用 Kitex `klog` 输出以下信息：校验后的实际 Consul 协议和地址、派生服务名、固定入口 Key，每个入口或引用文件开始读取及 YAML 解析成功，文件合并数量、最终校验通过、端口及其生效文件（缺省时标记默认值），随后记录准备监听的地址及已注册的 IDL Service 名称。配置加载失败使用 Error 日志记录安全错误，并终止启动；失败时不输出配置加载完成或服务配置生效。文件读取并解析成功仅表示该文件通过 YAML 解析，全部合并和最终端口校验完成后才输出配置加载完成。
+启动期间同样使用 Kitex `klog` 输出以下信息：校验后的实际 Consul 协议和地址、派生服务名、固定入口 Key，每个入口或引用文件开始读取及 YAML 解析成功、文件合并数量、最终端口及其生效文件（缺省时标记默认值），随后记录准备监听的地址及已注册的 IDL Service 名称。配置加载失败使用 Error 日志记录安全错误，并终止启动；失败时不输出服务配置生效。文件读取并解析成功仅表示该文件通过 YAML 解析，全部合并、端口校验和可选日志配置成功后才输出服务配置生效。
 
-日志明确说明配置只在启动时读取一次、没有动态监听。Token、配置正文和配置值均不输出（最终服务名及端口除外），配置覆盖日志保持原格式。IDL Service 注册是进程内 Kitex 注册，当前没有向 Consul 注册服务实例。准备监听日志不代表已成功绑定端口，实际监听成功以 Kitex 的 `server listen at addr=...` 为准。
+配置只在启动时读取一次，没有动态监听。Token、配置正文和配置值均不输出（最终服务名及端口除外），配置覆盖日志保持原格式。IDL Service 注册是进程内 Kitex 注册，当前没有向 Consul 注册服务实例。准备监听日志不代表已成功绑定端口，实际监听成功以 Kitex 的 `server listen at addr=...` 为准。
 
 Consul 请求使用 `X_CONSUL_ADDR` 明确指定的地址，不使用 SDK 默认地址或其他地址作为回退，也不跟随 HTTP 重定向。日志显示的是请求的端点，当前没有额外查询 Consul 数据中心，也没有按生产或测试名称做环境校验；配置了生产地址就会请求生产地址，不能把日志当作环境隔离机制。
 
@@ -102,7 +102,15 @@ core/
   internal/startup/   # 注册、底层 Kitex 创建与运行
 ```
 
-根包仍只公开 Server、WithService、ServerOption。ServerOption 没有公开字段或方法，零值无效。公开 Handler 参数为 any，兼容注册函数接收 IDL 接口、应用传入具体指针的形式；错误类型会在启动前返回。internal 实现不能由外部业务项目直接导入。
+根包只公开 Server、WithService、WithLogger、ServerOption。ServerOption 没有公开字段或方法，零值无效。公开 Handler 参数为 any，兼容注册函数接收 IDL 接口、应用传入具体指针的形式；错误类型会在启动前返回。internal 实现不能由外部业务项目直接导入。
+
+## 显式日志接入
+
+业务通过 `x.WithLogger(logging.New())` 显式选择日志实现。`WithLogger` 接收 Kitex 的 `klog.FullLogger`，同一个 Server 只能传一次，不接受 nil 或带类型的 nil；创建选项不产生全局副作用。应在启动其他日志 goroutine 前调用 Server，Kitex 的 SetLogger 不支持运行期间并发替换。
+
+core 在首次读取 Consul 前安装显式传入的实例，此时使用该实例的默认配置。全部配置合并和端口校验成功后，若实例实现 `ConfigureLogging([]byte) error`，core 单次传入合并后的 logging 节 YAML，不附带 logging 根字段或其他配置；缺省节传 nil。日志配置失败阻止 Service 注册和监听。普通 FullLogger 没有配置接口时，core 不处理 logging 节。
+
+core 在配置失败、注册失败、运行失败或正常退出时都释放显式 logger 的资源；服务停止及最后的结果日志先输出。若实现 `Close() error`，由 Close 负责刷新及关闭；否则若实现 `Sync() error`，则调用 Sync。关闭错误与原错误一起返回。core 不引入 logging、Zap 或 Lumberjack 依赖，也不会通过已安装 logger 或导入包推断是否启用日志接入。
 
 从 xkitex 目录进入独立模块验证：
 

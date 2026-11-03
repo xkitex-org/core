@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
-	"time"
 
 	"github.com/cloudwego/kitex/pkg/klog"
+	"gopkg.in/yaml.v3"
 )
 
 const (
@@ -23,7 +23,11 @@ type Settings struct {
 
 // Load 在启动时读取固定入口及其引用配置，合并校验后返回服务启动参数。
 func Load(ctx context.Context, lookup func(string) (string, bool)) (settings Settings, err error) {
-	started := time.Now()
+	return LoadWithLogging(ctx, lookup, nil)
+}
+
+// LoadWithLogging 在全部配置合并和端口校验通过后，仅向显式传入的 logger 下发 logging 节。
+func LoadWithLogging(ctx context.Context, lookup func(string) (string, bool), configure func([]byte) error) (settings Settings, err error) {
 	defer func() {
 		if err != nil {
 			klog.Errorf("core: 配置加载失败：%v", err)
@@ -62,6 +66,18 @@ func Load(ctx context.Context, lookup func(string) (string, bool)) (settings Set
 	if err != nil {
 		return Settings{}, fmt.Errorf("core: configuration %q: %w", id.key, err)
 	}
+	if configure != nil {
+		var body []byte
+		if value, exists := application.values["logging"]; exists {
+			body, err = yaml.Marshal(value)
+			if err != nil {
+				return Settings{}, fmt.Errorf("core: encode logging configuration failed")
+			}
+		}
+		if err := configure(body); err != nil {
+			return Settings{}, fmt.Errorf("core: configure logging: %w", err)
+		}
+	}
 	application.logOverrides()
 	portSource := "默认值"
 	if service := application.sources["service"]; service != nil {
@@ -69,7 +85,6 @@ func Load(ctx context.Context, lookup func(string) (string, bool)) (settings Set
 			portSource = port.file
 		}
 	}
-	klog.Infof("core: 配置加载完成：mode=[启动时读取一次，不监听变更] elapsed=[%s]", time.Since(started))
 	klog.Infof("core: 服务配置生效：name=[%s] port=[%d] port_source=[%s]", id.name, port, portSource)
 	return Settings{ServiceName: id.name, Port: port}, nil
 }
