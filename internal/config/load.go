@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"time"
+
+	"github.com/cloudwego/kitex/pkg/klog"
 )
 
 const (
@@ -19,7 +22,13 @@ type Settings struct {
 }
 
 // Load 在启动时读取固定入口及其引用配置，合并校验后返回服务启动参数。
-func Load(ctx context.Context, lookup func(string) (string, bool)) (Settings, error) {
+func Load(ctx context.Context, lookup func(string) (string, bool)) (settings Settings, err error) {
+	started := time.Now()
+	defer func() {
+		if err != nil {
+			klog.Errorf("core: 配置加载失败：%v", err)
+		}
+	}()
 	if lookup == nil {
 		return Settings{}, fmt.Errorf("core: environment reader is nil")
 	}
@@ -39,6 +48,7 @@ func Load(ctx context.Context, lookup func(string) (string, bool)) (Settings, er
 	if strings.ContainsAny(token, "\r\n") {
 		return Settings{}, fmt.Errorf("core: X_CONSUL_TOKEN contains invalid characters")
 	}
+	klog.Infof("core: 启动配置来源：service=[%s] consul=[%s://%s] entry=[%s]", id.name, endpoint.Scheme, endpoint.Host, id.key)
 	reader, closeReader, err := newConsulReader(endpoint, token)
 	if err != nil {
 		return Settings{}, err
@@ -53,6 +63,14 @@ func Load(ctx context.Context, lookup func(string) (string, bool)) (Settings, er
 		return Settings{}, fmt.Errorf("core: configuration %q: %w", id.key, err)
 	}
 	application.logOverrides()
+	portSource := "默认值"
+	if service := application.sources["service"]; service != nil {
+		if port := service.children["port"]; port != nil {
+			portSource = port.file
+		}
+	}
+	klog.Infof("core: 配置加载完成：mode=[启动时读取一次，不监听变更] elapsed=[%s]", time.Since(started))
+	klog.Infof("core: 服务配置生效：name=[%s] port=[%d] port_source=[%s]", id.name, port, portSource)
 	return Settings{ServiceName: id.name, Port: port}, nil
 }
 

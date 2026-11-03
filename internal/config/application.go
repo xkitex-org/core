@@ -7,18 +7,15 @@ import (
 	"io"
 	"strings"
 
+	"github.com/cloudwego/kitex/pkg/klog"
 	"gopkg.in/yaml.v3"
 )
 
 // loadApplication 按 imports 顺序加载单层引用，保留最终值及其覆盖信息。
 func loadApplication(ctx context.Context, key string, read func(context.Context, string) ([]byte, error)) (*applicationConfig, error) {
-	body, err := read(ctx, key)
+	application, err := readDocument(ctx, key, read)
 	if err != nil {
 		return nil, err
-	}
-	application, err := decodeDocument(body)
-	if err != nil {
-		return nil, fmt.Errorf("core: configuration %q: %w", key, err)
 	}
 	imports, err := takeImports(application, key)
 	if err != nil {
@@ -26,13 +23,9 @@ func loadApplication(ctx context.Context, key string, read func(context.Context,
 	}
 	merged := &applicationConfig{values: make(map[string]any), sources: make(map[string]*fieldSource)}
 	for _, importedKey := range imports {
-		body, err := read(ctx, importedKey)
+		fragment, err := readDocument(ctx, importedKey, read)
 		if err != nil {
 			return nil, err
-		}
-		fragment, err := decodeDocument(body)
-		if err != nil {
-			return nil, fmt.Errorf("core: configuration %q: %w", importedKey, err)
 		}
 		if _, nested := fragment["imports"]; nested {
 			return nil, fmt.Errorf("core: configuration %q: nested imports are not supported", importedKey)
@@ -40,7 +33,23 @@ func loadApplication(ctx context.Context, key string, read func(context.Context,
 		merge(merged.values, fragment, merged.sources, importedKey)
 	}
 	merge(merged.values, application, merged.sources, key)
+	klog.Infof("core: 配置文件合并完成：files=[%d] priority=[application.yaml 优先]", len(imports)+1)
 	return merged, nil
+}
+
+// readDocument 记录明确配置 Key 的读取及 YAML 解析阶段，不输出正文或配置值。
+func readDocument(ctx context.Context, key string, read func(context.Context, string) ([]byte, error)) (map[string]any, error) {
+	klog.Infof("core: 开始读取配置文件：key=[%s]", key)
+	body, err := read(ctx, key)
+	if err != nil {
+		return nil, err
+	}
+	document, err := decodeDocument(body)
+	if err != nil {
+		return nil, fmt.Errorf("core: configuration %q: %w", key, err)
+	}
+	klog.Infof("core: 配置文件读取并解析成功：key=[%s]", key)
+	return document, nil
 }
 
 // decodeDocument 解析单个 YAML 对象，拒绝多文档及非字符串字段名，并隐藏解析错误中的值。

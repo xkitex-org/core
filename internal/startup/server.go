@@ -6,7 +6,10 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"sort"
+	"strings"
 
+	"github.com/cloudwego/kitex/pkg/klog"
 	"github.com/cloudwego/kitex/pkg/rpcinfo"
 	"github.com/cloudwego/kitex/pkg/transmeta"
 	"github.com/cloudwego/kitex/server"
@@ -25,7 +28,14 @@ func start(ctx context.Context, lookup func(string) (string, bool), create func(
 	if err != nil {
 		return err
 	}
-	return run(func() server.Server { return create(settings) }, registrations...)
+	klog.Infof("core: 准备启动服务：name=[%s] listen=[:%d]", settings.ServiceName, settings.Port)
+	err = run(func() server.Server { return create(settings) }, registrations...)
+	if err != nil {
+		klog.Errorf("core: 服务启动或运行失败：name=[%s] error=[%v]", settings.ServiceName, err)
+	} else {
+		klog.Infof("core: 服务已停止：name=[%s]", settings.ServiceName)
+	}
+	return err
 }
 
 // newServer 配置应用服务名、监听端口及按 IDL Service 名分流的 Kitex Server。
@@ -61,9 +71,16 @@ func run(create func() server.Server, registrations ...Registration) (err error)
 			return fmt.Errorf("core: register service %d: %w", i+1, err)
 		}
 	}
-	if len(s.GetServiceInfos()) == 0 {
+	infos := s.GetServiceInfos()
+	if len(infos) == 0 {
 		return errors.New("core: no Service was registered")
 	}
+	services := make([]string, 0, len(infos))
+	for name := range infos {
+		services = append(services, name)
+	}
+	sort.Strings(services)
+	klog.Infof("core: IDL Service 注册完成：services=[%s]", strings.Join(services, ", "))
 	defer func() { err = errors.Join(err, s.Stop()) }()
 	return s.Run()
 }
