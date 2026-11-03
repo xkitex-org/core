@@ -19,6 +19,7 @@ const (
 type Settings struct {
 	ServiceName string
 	Port        int
+	consul      *consulReader
 }
 
 // Load 在启动时读取固定入口及其引用配置，合并校验后返回服务启动参数。
@@ -99,7 +100,7 @@ func LoadWithComponents(ctx context.Context, lookup func(string) (string, bool),
 		}
 	}
 	klog.Infof("core: 服务配置生效：name=[%s] port=[%d] port_source=[%s]", id.name, port, portSource)
-	return Settings{ServiceName: id.name, Port: port}, nil
+	return Settings{ServiceName: id.name, Port: port, consul: reader}, nil
 }
 
 // consulEndpoint 读取并校验 Consul 地址，未声明协议时使用 HTTP。

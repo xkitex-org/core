@@ -30,7 +30,7 @@ func start(ctx context.Context, lookup func(string) (string, bool), create func(
 
 // startWithLogging 按显式选项安装 logger，配置成功后运行服务，并在最后一条退出日志后释放日志资源。
 func startWithLogging(ctx context.Context, lookup func(string) (string, bool), create func(config.Settings) server.Server, logging *Logging, registrations ...Registration) error {
-	return startWithComponents(ctx, lookup, func(settings config.Settings, _ *lifecycle.State, _ <-chan error) server.Server {
+	return startWithComponents(ctx, lookup, func(_ context.Context, settings config.Settings, _ *lifecycle.State, _ <-chan error) server.Server {
 		return create(settings)
 	}, logging, nil, registrations...)
 }
@@ -77,6 +77,7 @@ func startWithComponents(ctx context.Context, lookup func(string) (string, bool)
 	if err != nil {
 		return err
 	}
+	defer settings.CloseConsul()
 	runtimeCtx, exit, watch, cleanup := supervise(ctx, state)
 	defer cleanup()
 	var fatal <-chan error
@@ -88,7 +89,7 @@ func startWithComponents(ctx context.Context, lookup func(string) (string, bool)
 	}
 	watch(fatal)
 	klog.Infof("core: 准备启动服务：name=[%s] listen=[:%d]", settings.ServiceName, settings.Port)
-	err = runWithState(func() server.Server { return create(settings, state, exit) }, state, registrations...)
+	err = runWithState(func() server.Server { return create(runtimeCtx, settings, state, exit) }, state, registrations...)
 	if err != nil {
 		klog.Errorf("core: 服务启动或运行失败：name=[%s] error=[%v]", settings.ServiceName, err)
 	} else {

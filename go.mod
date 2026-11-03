@@ -5,6 +5,7 @@ go 1.25.9
 require (
 	github.com/cloudwego/kitex v0.16.4
 	github.com/hashicorp/consul/api v1.34.1
+	github.com/kitex-contrib/registry-consul v0.2.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
@@ -31,7 +32,7 @@ require (
 	github.com/google/pprof v0.0.0-20240727154555-813a5fbdbec8 // indirect
 	github.com/hashicorp/errwrap v1.1.0 // indirect
 	github.com/hashicorp/go-cleanhttp v0.5.2 // indirect
-	github.com/hashicorp/go-hclog v1.5.0 // indirect
+	github.com/hashicorp/go-hclog v1.6.3 // indirect
 	github.com/hashicorp/go-immutable-radix v1.3.1 // indirect
 	github.com/hashicorp/go-multierror v1.1.1 // indirect
 	github.com/hashicorp/go-rootcerts v1.0.2 // indirect

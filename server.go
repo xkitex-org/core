@@ -15,7 +15,8 @@ type ServerOption struct {
 
 // Server 校验服务身份并从固定 Consul Key 读取配置后，按顺序注册所有 Service。
 // 全部成功后启动同一个 Kitex Server 并阻塞运行，配置、注册或运行失败时返回错误。
-// 退出信号和优雅停机由 Kitex 处理。
+// RPC 监听后自动向同一 Consul 登记实例，可选探针决定初始及后续就绪状态。
+// 退出时先撤销可用性和注销实例，再由 Kitex 完成优雅排空。
 func Server(options ...ServerOption) error {
 	registrations := make([]startup.Registration, 0, len(options))
 	var logging *startup.Logging

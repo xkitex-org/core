@@ -13,15 +13,17 @@ import (
 
 // consulReader 在一次启动加载期间复用官方 SDK 客户端，不创建配置监听。
 type consulReader struct {
-	client *api.Client
-	token  string
+	client    *api.Client
+	token     string
+	config    *api.Config
+	transport *http.Transport
 }
 
 // newConsulReader 创建启动期读取器，并返回释放其空闲连接的清理函数。
 func newConsulReader(endpoint *url.URL, token string) (*consulReader, func(), error) {
 	// 独立传输器，关闭启动期空闲连接，不影响应用自己的 HTTP 连接池。
 	transport := &http.Transport{Proxy: http.ProxyFromEnvironment, TLSHandshakeTimeout: 5 * time.Second}
-	client, err := api.NewClient(&api.Config{
+	configuration := &api.Config{
 		Address: endpoint.Host,
 		Scheme:  endpoint.Scheme,
 		Token:   token,
@@ -31,12 +33,13 @@ func newConsulReader(endpoint *url.URL, token string) (*consulReader, func(), er
 			// 不跟随重定向，确保 ACL Token 只发送到配置的 Consul 端点。
 			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 		},
-	})
+	}
+	client, err := api.NewClient(configuration)
 	if err != nil {
 		transport.CloseIdleConnections()
 		return nil, nil, fmt.Errorf("core: create Consul configuration client failed")
 	}
-	return &consulReader{client: client, token: token}, transport.CloseIdleConnections, nil
+	return &consulReader{client: client, token: token, config: configuration, transport: transport}, transport.CloseIdleConnections, nil
 }
 
 // read 单次读取明确的 KV Key，失败时不返回配置正文或 SDK 响应正文。
@@ -65,4 +68,32 @@ func (r *consulReader) read(ctx context.Context, key string) ([]byte, error) {
 		return nil, fmt.Errorf("core: Consul configuration exceeds 1 MiB")
 	}
 	return pair.Value, nil
+}
+
+// ConsulClient 返回启动期间已经校验端点和 ACL 的同一个 SDK 客户端。
+func (s Settings) ConsulClient() *api.Client {
+	if s.consul == nil {
+		return nil
+	}
+	return s.consul.client
+}
+
+// RegistryClient 从同一连接参数派生第三方客户端，包装传输层以回收库内心跳并隐藏错误正文。
+func (s Settings) RegistryClient(wrap func(http.RoundTripper) http.RoundTripper) (*api.Client, error) {
+	if s.consul == nil {
+		return nil, fmt.Errorf("core: Consul connection is unavailable")
+	}
+	configuration := *s.consul.config
+	client := *configuration.HttpClient
+	client.Timeout = 3 * time.Second
+	client.Transport = wrap(client.Transport)
+	configuration.HttpClient = &client
+	return api.NewClient(&configuration)
+}
+
+// CloseConsul 在所有注册和检查任务结束后释放该实例使用的连接池。
+func (s Settings) CloseConsul() {
+	if s.consul != nil {
+		s.consul.transport.CloseIdleConnections()
+	}
 }

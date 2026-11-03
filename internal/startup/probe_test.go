@@ -58,7 +58,7 @@ func TestProbeSectionAndLifecycleIsolation(t *testing.T) {
 	sentinel := errors.New("registration stopped")
 	registration := NewRegistration(func(server.Server, *int, ...server.RegisterOption) error { return sentinel }, new(int))
 	var state *lifecycle.State
-	err := startWithComponents(context.Background(), configEnvironment(consul.URL), func(_ config.Settings, s *lifecycle.State, _ <-chan error) server.Server {
+	err := startWithComponents(context.Background(), configEnvironment(consul.URL), func(_ context.Context, _ config.Settings, s *lifecycle.State, _ <-chan error) server.Server {
 		state = s
 		if p.serviceName != "demo-api" || p.started != 1 || p.phase() != "Starting" || s.Available() {
 			t.Fatal("wrong initial lifecycle")
@@ -94,7 +94,7 @@ func TestProbeFailurePreventsRPCAndStillCloses(t *testing.T) {
 			_ = json.NewEncoder(w).Encode([]map[string]any{{"Value": []byte("{}")}})
 		}))
 		var created atomic.Bool
-		err := startWithComponents(context.Background(), configEnvironment(consul.URL), func(config.Settings, *lifecycle.State, <-chan error) server.Server {
+		err := startWithComponents(context.Background(), configEnvironment(consul.URL), func(context.Context, config.Settings, *lifecycle.State, <-chan error) server.Server {
 			created.Store(true)
 			return &fakeServer{}
 		}, nil, NewProbe(p))

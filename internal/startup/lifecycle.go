@@ -7,27 +7,18 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/cloudwego/kitex/pkg/registry"
 	"github.com/cloudwego/kitex/server"
 	"go.chaoxizhongzhi.com/xkitex/core/internal/config"
 	"go.chaoxizhongzhi.com/xkitex/core/internal/lifecycle"
+	"go.chaoxizhongzhi.com/xkitex/core/internal/registration"
 )
 
-// lifecycleObserver 观察 Kitex 按实例提供的框架回调，不访问任何服务注册中心。
-type lifecycleObserver struct{ state *lifecycle.State }
-
-// Register 在 Kitex 自身的监听和启动流程之后记录运行阶段，不做外部注册或健康等待。
-func (o lifecycleObserver) Register(*registry.Info) error { o.state.Run(); return nil }
-
-// Deregister 在 RPC 排空前记录停机阶段，实际服务注销留待后续接入。
-func (o lifecycleObserver) Deregister(*registry.Info) error { o.state.Stop(); return nil }
-
 // serverFactory 为每个 Server 注入私有生命周期及退出通道，不使用全局启动或停机钩子。
-type serverFactory func(config.Settings, *lifecycle.State, <-chan error) server.Server
+type serverFactory func(context.Context, config.Settings, *lifecycle.State, <-chan error) server.Server
 
-// managedServer 沿用 Kitex 的阻塞运行和优雅排空，只对接按实例的运行通知及退出信号。
-func managedServer(settings config.Settings, state *lifecycle.State, exit <-chan error) server.Server {
-	return newServer(settings, server.WithRegistry(lifecycleObserver{state}), server.WithExitSignal(func() <-chan error { return exit }))
+// managedServer 在 Kitex 监听后登记当前实例，沿用每实例退出信号及原生优雅排空。
+func managedServer(ctx context.Context, settings config.Settings, state *lifecycle.State, exit <-chan error) server.Server {
+	return newServer(settings, server.WithRegistry(registration.New(ctx, settings, state)), server.WithExitSignal(func() <-chan error { return exit }))
 }
 
 // supervise 在转发退出信号前撤销可用状态；探针自身故障进入失败状态，健康检查失败不会退出服务。

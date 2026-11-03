@@ -25,6 +25,7 @@ type State struct {
 	gated   bool
 	started bool
 	ready   bool
+	changed chan struct{}
 }
 
 // New 创建初始不可用状态；未接探针的实例在框架运行通知后直接允许使用。
@@ -32,7 +33,7 @@ func New(service string, gated bool) *State {
 	if service == "" {
 		service = "未确定"
 	}
-	s := &State{service: service, gated: gated}
+	s := &State{service: service, gated: gated, changed: make(chan struct{}, 1)}
 	s.changePhase(Starting)
 	return s
 }
@@ -47,6 +48,7 @@ func (s *State) changePhase(next Phase) {
 		previous = "None"
 	}
 	s.phase = next
+	s.notify()
 	klog.Infof("core: 实例生命周期变化：service=[%s] from=[%s] to=[%s]", s.service, previous, next)
 }
 
@@ -100,5 +102,23 @@ func (s *State) Report(started, ready bool) bool {
 	before := s.available()
 	s.started = s.started || started
 	s.ready = s.started && ready
-	return before != s.available()
+	changed := before != s.available()
+	if changed {
+		s.notify()
+	}
+	return changed
+}
+
+// Changes 合并实例阶段或就绪变化，消费者读取最新状态而非回放过期检查结果。
+func (s *State) Changes() <-chan struct{} { return s.changed }
+
+// ProbeEnabled 返回该实例是否显式接入探针，此声明在构造后不再变化。
+func (s *State) ProbeEnabled() bool { return s.gated }
+
+// notify 在持锁或构造期间唤醒单个注册同步器，不阻塞健康检查和停机流程。
+func (s *State) notify() {
+	select {
+	case s.changed <- struct{}{}:
+	default:
+	}
 }

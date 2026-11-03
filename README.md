@@ -76,15 +76,15 @@ database:
 
 启动期间同样使用 Kitex `klog` 输出以下信息：校验后的实际 Consul 协议和地址、派生服务名、固定入口 Key，每个入口或引用文件开始读取及 YAML 解析成功、文件合并数量、最终端口及其生效文件（缺省时标记默认值），随后记录准备监听的地址及已注册的 IDL Service 名称。配置加载失败使用 Error 日志记录安全错误，并终止启动；失败时不输出服务配置生效。文件读取并解析成功仅表示该文件通过 YAML 解析，全部合并、端口校验和可选日志配置成功后才输出服务配置生效。
 
-配置只在启动时读取一次，没有动态监听。Token、配置正文和配置值均不输出（最终服务名及端口除外），配置覆盖日志保持原格式。IDL Service 注册是进程内 Kitex 注册，当前没有向 Consul 注册服务实例。准备监听日志不代表已成功绑定端口，实际监听成功以 Kitex 的 `server listen at addr=...` 为准。
+配置只在启动时读取一次，没有动态监听。Token、配置正文和配置值均不输出（最终服务名及端口除外），配置覆盖日志保持原格式。IDL Service 注册是进程内 Kitex 注册；监听成功后，core 自动向 Consul 登记一个应用实例。准备监听日志不代表已成功绑定端口，实际监听成功以 Kitex 的 `server listen at addr=...` 为准。
 
 Consul 请求使用 `X_CONSUL_ADDR` 明确指定的地址，不使用 SDK 默认地址或其他地址作为回退，也不跟随 HTTP 重定向。日志显示的是请求的端点，当前没有额外查询 Consul 数据中心，也没有按生产或测试名称做环境校验；配置了生产地址就会请求生产地址，不能把日志当作环境隔离机制。
 
 Consul ACL 可让研发只修改入口、由管理员维护共享文件；应用 Token 必须能读取所有引用。ACL 保护共享文件本身，入口仍可覆盖共享字段，覆盖行为遵循上述优先级。
 
-读取并校验成功后，core 把应用服务名和监听端口交给 Kitex，再执行业务注册和启动。当前不增加平台校验、配置热更新或 Consul 实例注册。
+读取并校验成功后，core 把应用服务名和监听端口交给 Kitex，再执行业务注册和启动。当前不增加平台校验或配置热更新。
 
-后续服务注册与发现使用 `github.com/kitex-contrib/registry-consul`；服务治理后续接入 Sentinel，当前不引入 `config-consul`。官方 Consul SDK 固定为 v1.34.1，Go 最低版本为 1.25.9。
+服务注册使用 `github.com/kitex-contrib/registry-consul` v0.2.0，客户端发现接入继续延后；服务治理后续接入 Sentinel，当前不引入 `config-consul`。官方 Consul SDK 固定为 v1.34.1，Go 最低版本为 1.25.9。
 
 ## 注册与包边界
 
@@ -125,15 +125,15 @@ GOWORK=off GOTOOLCHAIN=local go build ./...
 
 ## 生命周期与可选探针
 
-通过 `x.WithProbe(probe.New())` 显式接入独立 probe 模块。不传时不读取 probe 配置、不启动 HTTP、不等待健康检查；当前依然没有外部服务注册行为，未来注册模块可在原有框架注册位置直接登记为可用。
+通过 `x.WithProbe(probe.New())` 显式接入独立 probe 模块。不传时不读取 probe 配置、不启动 HTTP、不等待健康检查；监听成功后自动登记应用实例，首次登记即 passing。
 
 每个 Server 内独立维护 Starting、Running、Stopping、Stopped、Failed 阶段，以及独立的可用性。Running 仅表示框架运行阶段；接探针时，还需启动检查和就绪检查通过才能 Available。启动完成单向锁存，就绪可失败及恢复。Stopping、Stopped、Failed 始终不可用，不能被迟到的检查或启动通知覆盖。
 
-本实现通过 Kitex 按实例的 Registry 扩展回调观察运行与排空阶段，回调内部不访问注册中心，保留 Kitex 原有约一秒的内部回调时机，没有额外健康等待。没有使用包级全局启动或停机钩子。收到 SIGINT/SIGTERM 时先标记 Stopping，再通过每实例退出通道交给 Kitex 原生排空；探针 HTTP 自身故障标记 Failed 后触发清理。
+本实现通过 Kitex 按实例的 Registry 扩展回调登记和注销实例，登记成功后记录 Running，保留 Kitex 原有约一秒的内部回调时机；未接探针时不增加健康等待。没有使用包级全局启动或停机钩子。收到 SIGINT/SIGTERM 时先标记 Stopping，再通过每实例退出通道交给 Kitex 原生排空；探针 HTTP 自身故障标记 Failed 后触发清理。
 
 core 先应用 logging 节，再应用 probe 节；两个回调都只收到各自合并后的 YAML。探针先同步绑定独立 HTTP 端口，再创建及运行 RPC；失败时不继续启动 RPC。正常运行期间，core 只接收后台报告，不通过 HTTP 反向轮询自己。
 
-未来服务注册应消费此可用性：接入探针的实例先登记为不可用，再应用最新检查结果，readiness 恢复时更新同一实例，正常停机时注销。此处没有实现该注册驱动。
+接入探针的实例首次登记即不可用，startup 完成且 readiness 通过后更新独立就绪检查，readiness 失败和恢复更新同一实例；正常停机先撤销可用性再注销。
 
 本轮生命周期与可选探针能力通过正式 v0.0.1 模块依赖接入。调用样例和 probe 配置说明见相邻 probe 模块的 README。
 
@@ -152,3 +152,47 @@ core: 实例生命周期变化：service=[zmall-product] from=[Stopping] to=[Sto
 正常 `Stopped` 在 RPC 和 probe 清理完成后、日志资源关闭前输出；后续日志关闭失败会再记录 `Failed`。core 通过可选的 `SetServiceName(string)` 协议将服务名传给 probe，不更改既有 Start 协议，也不向 probe 配置混入其他配置节。既有自定义 Probe 实现不必新增该方法。
 
 startup、readiness、liveness 由 probe 分别记录状态变化及检查项数量，不再只输出 `available`。无 probe 时仍记录实例生命周期，不伪造探针检查结果。
+
+
+## Consul 实例注册
+
+注册是 core 的内置能力，业务无需新增选项或环境变量。沿用读取应用配置时已经校验的 Consul 地址及 ACL Token，不重新读取环境或回退到其他端点。应用 Token 需要配置读取权限及目标服务的 `service:write` 权限；只有 KV 读取权限时，登记失败会阻止启动。
+
+```go
+// 不接探针：RPC 监听成功后直接登记为可用。
+x.Server(
+    x.WithService(productservice.RegisterService, productHandler),
+    x.WithService(categoryservice.RegisterService, categoryHandler),
+)
+
+// 接探针：先登记为不可用，业务就绪后再放行。
+x.Server(
+    x.WithProbe(probe.New(probe.WithReadiness("database", checkDatabase))),
+    x.WithService(productservice.RegisterService, productHandler),
+    x.WithService(categoryservice.RegisterService, categoryHandler),
+)
+```
+
+一个 Server 在 Consul 中登记一个 `GROUP-NAME` 应用实例，多个 IDL Service 共用它。实例 ID 沿用 registry-consul 的 `服务名:IP:RPC端口` 格式，登记 RPC 端口而非 HTTP 探针端口。通配监听地址会选择本机非回环 IPv4，日志输出实际登记地址；当前不增加广告地址配置，调用方必须能够访问该地址。
+
+| 条件 | Consul 服务检查 |
+| --- | --- |
+| 未监听或配置失败 | 不登记 |
+| 未接 probe | 首次登记即 passing |
+| 接入 probe，startup/readiness 未通过 | 首次登记即 critical |
+| startup 完成且 readiness 通过 | 独立 readiness 检查变为 passing |
+| readiness 失败或恢复 | 同一检查在 critical/passing 间切换 |
+| 正常停机 | 停止续约、进入维护状态、注销，再排空 RPC |
+| 进程无法续约 | TTL 到期变为 critical，保留记录 |
+
+registry-consul 负责最终登记、注销及实例心跳；SDK 在首次登记时原子创建初始检查。心跳与 readiness 使用不同的 TTL 检查 ID，每次启动生成新的检查 ID，旧心跳不能更新新检查。接 probe 时，SDK 创建 critical 的 readiness 检查，后续第三方登记保留它，不存在先可用再撤销的初始窗口。空的 `probe.New()` 没有业务检查，进入 Running 后会很快通过；liveness 不直接控制 Consul 就绪状态。
+
+TTL 默认 15 秒，core 每 5 秒补充续约；状态变化立即唤醒同步任务。任务按实例串行处理并读取最新状态，探针不等待网络请求。同步失败后重试，远端成功才输出就绪同步成功日志，不把本地检查通过当作 Consul 已经更新。Agent 丢失登记时先重建初始检查再应用最新状态；不会因 readiness 长期失败自动删除实例。
+
+实例带有 `xkitex.managed` 和 `xkitex.owner` 标签。core 独占管理该实例的检查集合，启动时原子替换本实例遗留检查，避免上一次接 probe、本次不接而被旧检查卡住；非 core 管理的同 ID 实例会拒绝覆盖。不得在 core 管理的实例上额外挂载需要跨重启保留的检查；其他实例不受影响。
+
+正常停机先锁定不可恢复的 Stopping 状态，再启用 Consul 维护模式，防止第三方心跳重新放行，随后由 registry-consul 注销。未确认注销成功时返回错误，远端租约会在停止续约后到期。所有请求有超时，第三方错误响应正文不进入日志。registry-consul v0.2.0 没有独立 Close，且只在注销成功后取消内部心跳；内部适配在真实清理后停止外部请求，并仅在本地完成其取消流程。这个本地收尾结果不代表远端注销成功，也不会覆盖真实错误。
+
+本轮只接入服务注册，没有增加客户端封装、管理平台校验或服务治理。注册实现位于 `internal/registration`，根包没有新增公开方法。
+
+验证包含模拟 Agent、真实 Kitex 多 Service 调用，以及本机临时 Consul 的 ACL/TTL 测试；真实 Agent 测试只使用随机端口和临时目录，不访问现有环境。本机未安装 consul 时，对应测试会明确跳过。
