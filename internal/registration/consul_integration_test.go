@@ -104,7 +104,7 @@ key_prefix "config/zmall/" { policy = "read" }`}, nil)
 func TestConsulACLRegistrationAndTTL(t *testing.T) {
 	management, address, token := devAgent(t)
 	for _, gated := range []bool{false, true} {
-		t.Run(fmt.Sprintf("probe=%t", gated), func(t *testing.T) {
+		t.Run(fmt.Sprintf("monitor=%t", gated), func(t *testing.T) {
 			values := map[string]string{"X_SERVICE_GROUP": "zmall", "X_SERVICE_NAME": "product", "X_CONSUL_ADDR": address, "X_CONSUL_TOKEN": token}
 			settings, err := config.Load(context.Background(), func(key string) (string, bool) { value, ok := values[key]; return value, ok })
 			if err != nil {

@@ -21,26 +21,26 @@ import (
 	"github.com/hashicorp/consul/api"
 )
 
-// registrationProbe 通过通道交出检查报告入口，并确认 RPC 注销先于探针关闭。
-type registrationProbe struct {
+// registrationMonitor 通过通道交出检查报告入口，并确认 RPC 注销先于探针关闭。
+type registrationMonitor struct {
 	report         chan func(bool, bool)
 	phase          func() string
 	isDeregistered func() bool
 	closeOrder     bool
 }
 
-// ConfigureProbe 接收隔离配置，不启动其他资源。
-func (p *registrationProbe) ConfigureProbe([]byte) error { return nil }
+// ConfigureMonitor 接收隔离配置，不启动其他资源。
+func (p *registrationMonitor) ConfigureMonitor([]byte) error { return nil }
 
 // Start 暴露当前实例报告函数，用于验证业务就绪与注册同步之间的真实接线。
-func (p *registrationProbe) Start(_ context.Context, phase func() string, report func(bool, bool)) (<-chan error, error) {
+func (p *registrationMonitor) Start(_ context.Context, phase func() string, report func(bool, bool)) (<-chan error, error) {
 	p.phase = phase
 	p.report <- report
 	return nil, nil
 }
 
 // Close 验证远端注销已经完成。
-func (p *registrationProbe) Close() error { p.closeOrder = p.isDeregistered(); return nil }
+func (p *registrationMonitor) Close() error { p.closeOrder = p.isDeregistered(); return nil }
 
 // TestManagedServerRegistrationAndMultipleRPC 验证默认启动流程自动登记一个实例，且两个 RPC Service 共用就绪门控。
 func TestManagedServerRegistrationAndMultipleRPC(t *testing.T) {
@@ -104,7 +104,7 @@ func TestManagedServerRegistrationAndMultipleRPC(t *testing.T) {
 		}
 	}))
 	defer agent.Close()
-	p := &registrationProbe{report: make(chan func(bool, bool), 1), isDeregistered: func() bool { mu.Lock(); defer mu.Unlock(); return deregistered }}
+	p := &registrationMonitor{report: make(chan func(bool, bool), 1), isDeregistered: func() bool { mu.Lock(); defer mu.Unlock(); return deregistered }}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	var services []Registration
@@ -125,7 +125,7 @@ func TestManagedServerRegistrationAndMultipleRPC(t *testing.T) {
 		defer cli.Close()
 	}
 	go func() {
-		done <- startWithComponents(ctx, configEnvironment(agent.URL), managedServer, nil, NewProbe(p), services...)
+		done <- startWithComponents(ctx, configEnvironment(agent.URL), managedServer, nil, NewMonitor(p), services...)
 	}()
 	defer func() {
 		cancel()
@@ -138,14 +138,14 @@ func TestManagedServerRegistrationAndMultipleRPC(t *testing.T) {
 			t.Error("managed server did not stop")
 		}
 		if !p.closeOrder {
-			t.Error("probe closed before instance deregistration")
+			t.Error("monitor closed before instance deregistration")
 		}
 	}()
 	var report func(bool, bool)
 	select {
 	case report = <-p.report:
 	case <-time.After(3 * time.Second):
-		t.Fatal("probe was not started")
+		t.Fatal("monitor was not started")
 	}
 	deadline := time.Now().Add(5 * time.Second)
 	for {

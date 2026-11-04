@@ -112,8 +112,8 @@ func (s *State) Report(started, ready bool) bool {
 // Changes 合并实例阶段或就绪变化，消费者读取最新状态而非回放过期检查结果。
 func (s *State) Changes() <-chan struct{} { return s.changed }
 
-// ProbeEnabled 返回该实例是否显式接入探针，此声明在构造后不再变化。
-func (s *State) ProbeEnabled() bool { return s.gated }
+// MonitorEnabled 返回该实例是否显式接入探针，此声明在构造后不再变化。
+func (s *State) MonitorEnabled() bool { return s.gated }
 
 // notify 在持锁或构造期间唤醒单个注册同步器，不阻塞健康检查和停机流程。
 func (s *State) notify() {

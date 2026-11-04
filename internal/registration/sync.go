@@ -65,7 +65,7 @@ func (c *Controller) synchronize() error {
 			return safeError("renew heartbeat", err)
 		}
 	}
-	if !c.state.ProbeEnabled() {
+	if !c.state.MonitorEnabled() {
 		if c.syncFailed {
 			klog.Infof("core: 实例检查同步已恢复：service=[%s] instance=[%s]", c.settings.ServiceName, c.id)
 		}

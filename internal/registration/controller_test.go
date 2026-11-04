@@ -248,8 +248,8 @@ func TestReadinessGateRecoveryAndLateResults(t *testing.T) {
 	}
 }
 
-// TestStaleProbeChecksAreReplaced 验证上一轮带探针的检查不会影响本轮不带探针实例。
-func TestStaleProbeChecksAreReplaced(t *testing.T) {
+// TestStaleMonitorChecksAreReplaced 验证上一轮带探针的检查不会影响本轮不带探针实例。
+func TestStaleMonitorChecksAreReplaced(t *testing.T) {
 	a := newAgent(t)
 	c, info := fixture(t, a, false)
 	a.service = &api.AgentServiceRegistration{ID: "zmall-product:127.0.0.1:9888", Name: "zmall-product", Tags: []string{managedTag + ":true", ownerTag + ":old"}}
@@ -260,7 +260,7 @@ func TestStaleProbeChecksAreReplaced(t *testing.T) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if !a.available() || a.checks["old-readiness"] != nil || len(a.checks) != 1 {
-		t.Fatal("old probe checks prevented direct registration")
+		t.Fatal("old monitor checks prevented direct registration")
 	}
 }
 

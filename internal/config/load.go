@@ -32,8 +32,14 @@ func LoadWithLogging(ctx context.Context, lookup func(string) (string, bool), co
 	return LoadWithComponents(ctx, lookup, configure, nil)
 }
 
-// LoadWithComponents 向显式接入的日志和探针实现单次传入各自合并配置，不暴露其他配置节。
-func LoadWithComponents(ctx context.Context, lookup func(string) (string, bool), configureLogging, configureProbe func([]byte) error) (settings Settings, err error) {
+// Component 保存内部扩展配置协议，不向业务暴露整个配置对象。
+type Component struct {
+	Name      string
+	Configure func([]byte) error
+}
+
+// LoadWithComponents 向显式组件单次传入各自合并配置，不暴露其他配置节。
+func LoadWithComponents(ctx context.Context, lookup func(string) (string, bool), configureLogging, configureMonitor func([]byte) error, additional ...Component) (settings Settings, err error) {
 	defer func() {
 		if err != nil {
 			klog.Errorf("core: 配置加载失败：%v", err)
@@ -72,24 +78,20 @@ func LoadWithComponents(ctx context.Context, lookup func(string) (string, bool),
 	if err != nil {
 		return Settings{}, fmt.Errorf("core: configuration %q: %w", id.key, err)
 	}
-	for _, component := range []struct {
-		name      string
-		configure func([]byte) error
-	}{
-		{"logging", configureLogging}, {"probe", configureProbe},
-	} {
-		if component.configure == nil {
+	components := append([]Component{{"logging", configureLogging}, {"monitor", configureMonitor}}, additional...)
+	for _, component := range components {
+		if component.Configure == nil {
 			continue
 		}
 		var body []byte
-		if value, exists := application.values[component.name]; exists {
+		if value, exists := application.values[component.Name]; exists {
 			body, err = yaml.Marshal(value)
 			if err != nil {
-				return Settings{}, fmt.Errorf("core: encode %s configuration failed", component.name)
+				return Settings{}, fmt.Errorf("core: encode %s configuration failed", component.Name)
 			}
 		}
-		if err := component.configure(body); err != nil {
-			return Settings{}, fmt.Errorf("core: configure %s: %w", component.name, err)
+		if err := component.Configure(body); err != nil {
+			return Settings{}, fmt.Errorf("core: configure %s: %w", component.Name, err)
 		}
 	}
 	application.logOverrides()

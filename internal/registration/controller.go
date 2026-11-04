@@ -87,7 +87,7 @@ func (c *Controller) Register(source *registry.Info) (err error) {
 	if err != nil {
 		return safeError("create registry", err)
 	}
-	klog.Infof("core: 开始登记实例：service=[%s] instance=[%s] addr=[%s] probe=[%t]", c.settings.ServiceName, c.id, c.info.Addr, c.state.ProbeEnabled())
+	klog.Infof("core: 开始登记实例：service=[%s] instance=[%s] addr=[%s] monitor=[%t]", c.settings.ServiceName, c.id, c.info.Addr, c.state.MonitorEnabled())
 	c.attempted = true
 	if err = c.bootstrap(); err != nil {
 		return err
@@ -101,7 +101,7 @@ func (c *Controller) Register(source *registry.Info) (err error) {
 	c.registered = true
 	c.state.Run()
 	initial := api.HealthPassing
-	if c.state.ProbeEnabled() {
+	if c.state.MonitorEnabled() {
 		initial = api.HealthCritical
 	}
 	klog.Infof("core: 实例登记成功：service=[%s] instance=[%s] addr=[%s] initial_status=[%s]", c.settings.ServiceName, c.id, c.info.Addr, initial)
@@ -124,7 +124,7 @@ func (c *Controller) definition() *api.AgentServiceRegistration {
 	}
 	sort.Strings(tags)
 	checks := api.AgentServiceChecks{c.heartbeatCheck()}
-	if c.state.ProbeEnabled() {
+	if c.state.MonitorEnabled() {
 		checks = append(checks, &api.AgentServiceCheck{CheckID: c.readinessID, Name: "xkitex readiness", TTL: c.ttl.String(), Status: api.HealthCritical})
 	}
 	return &api.AgentServiceRegistration{ID: c.id, Name: c.settings.ServiceName, Address: address.IP.String(), Port: address.Port, Tags: tags, Weights: &api.AgentWeights{Passing: c.info.Weight, Warning: c.info.Weight}, Checks: checks}

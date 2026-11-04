@@ -23,7 +23,7 @@ func TestAvailabilityPolicy(t *testing.T) {
 	gated := New("demo-api", true)
 	gated.Run()
 	if gated.Available() {
-		t.Fatal("probe checks bypassed")
+		t.Fatal("monitor checks bypassed")
 	}
 	gated.Report(true, true)
 	if !gated.Available() {
@@ -58,7 +58,7 @@ func TestTerminalStatesWinOverLateResults(t *testing.T) {
 	state.Stop()
 	group.Wait()
 	if state.Phase() != string(Stopping) || state.Available() {
-		t.Fatal("late probe revived a stopping instance")
+		t.Fatal("late monitor revived a stopping instance")
 	}
 	failure := errors.New("failure")
 	state.Finish(failure)
