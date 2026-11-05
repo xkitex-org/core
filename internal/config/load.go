@@ -6,7 +6,6 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/cloudwego/kitex/pkg/klog"
 	"gopkg.in/yaml.v3"
 )
 
@@ -40,69 +39,49 @@ type Component struct {
 
 // LoadWithComponents 向显式组件单次传入各自合并配置，不暴露其他配置节。
 func LoadWithComponents(ctx context.Context, lookup func(string) (string, bool), configureLogging, configureMonitor func([]byte) error, additional ...Component) (settings Settings, err error) {
-	defer func() {
-		if err != nil {
-			klog.Errorf("core: 配置加载失败：%v", err)
-		}
-	}()
+	return NewStore().Apply(ctx, lookup, configureLogging, configureMonitor, additional...)
+}
+
+// readSnapshot 强制校验身份及 Consul 端点，读取并合并全部文件后生成不可变快照。
+func readSnapshot(ctx context.Context, lookup func(string) (string, bool), logf func(string, ...any)) (*snapshot, error) {
 	if lookup == nil {
-		return Settings{}, fmt.Errorf("core: environment reader is nil")
+		return nil, fmt.Errorf("core: environment reader is nil")
 	}
 	id, err := loadIdentity(lookup)
 	if err != nil {
-		return Settings{}, err
+		return nil, err
 	}
 	endpoint, err := consulEndpoint(lookup)
 	if err != nil {
-		return Settings{}, err
+		return nil, err
 	}
 	rawToken, _ := lookup("X_CONSUL_TOKEN")
 	token := strings.TrimSpace(rawToken)
 	if token == "" {
-		return Settings{}, fmt.Errorf("core: X_CONSUL_TOKEN is required")
+		return nil, fmt.Errorf("core: X_CONSUL_TOKEN is required")
 	}
 	if strings.ContainsAny(token, "\r\n") {
-		return Settings{}, fmt.Errorf("core: X_CONSUL_TOKEN contains invalid characters")
+		return nil, fmt.Errorf("core: X_CONSUL_TOKEN contains invalid characters")
 	}
-	klog.Infof("core: 启动配置来源：service=[%s] consul=[%s://%s] entry=[%s]", id.name, endpoint.Scheme, endpoint.Host, id.key)
+	logf("core: 启动配置来源：service=[%s] consul=[%s://%s] entry=[%s]", id.name, endpoint.Scheme, endpoint.Host, id.key)
 	reader, closeReader, err := newConsulReader(endpoint, token)
 	if err != nil {
-		return Settings{}, err
+		return nil, err
 	}
 	defer closeReader()
-	application, err := loadApplication(ctx, id.key, reader.read)
+	application, err := loadApplicationLogged(ctx, id.key, reader.read, logf)
 	if err != nil {
-		return Settings{}, err
+		return nil, err
 	}
 	port, err := parsePort(application.values)
 	if err != nil {
-		return Settings{}, fmt.Errorf("core: configuration %q: %w", id.key, err)
+		return nil, fmt.Errorf("core: configuration %q: %w", id.key, err)
 	}
-	components := append([]Component{{"logging", configureLogging}, {"monitor", configureMonitor}}, additional...)
-	for _, component := range components {
-		if component.Configure == nil {
-			continue
-		}
-		var body []byte
-		if value, exists := application.values[component.Name]; exists {
-			body, err = yaml.Marshal(value)
-			if err != nil {
-				return Settings{}, fmt.Errorf("core: encode %s configuration failed", component.Name)
-			}
-		}
-		if err := component.Configure(body); err != nil {
-			return Settings{}, fmt.Errorf("core: configure %s: %w", component.Name, err)
-		}
+	body, err := yaml.Marshal(application.values)
+	if err != nil {
+		return nil, fmt.Errorf("core: 合并配置编码失败")
 	}
-	application.logOverrides()
-	portSource := "默认值"
-	if service := application.sources["service"]; service != nil {
-		if port := service.children["port"]; port != nil {
-			portSource = port.file
-		}
-	}
-	klog.Infof("core: 服务配置生效：name=[%s] port=[%d] port_source=[%s]", id.name, port, portSource)
-	return Settings{ServiceName: id.name, Port: port, consul: reader}, nil
+	return &snapshot{settings: Settings{ServiceName: id.name, Port: port, consul: reader}, application: application, body: body}, nil
 }
 
 // consulEndpoint 读取并校验 Consul 地址，未声明协议时使用 HTTP。

@@ -20,12 +20,17 @@ import (
 )
 
 // Run 先校验身份并读取固定 Consul 配置，成功后才创建、注册和运行 Server。
-func Run(logging *Logging, monitoring *Monitoring, databases *Databasing, caches *Caching, guarding *Guarding, configurations []*Configuration, registrations ...Registration) error {
+func Run(logging *Logging, monitoring *Monitoring, databases *Databasing, caches *Caching, guarding *Guarding, registrations ...Registration) error {
+	store, release, err := claimConfiguration()
+	if err != nil {
+		return err
+	}
+	defer release()
 	create := serverFactory(func(ctx context.Context, settings config.Settings, state *lifecycle.State, exit <-chan error) server.Server {
 		options := middlewareOptions(monitoring, guarding)
 		return managedServerWithOptions(ctx, settings, state, exit, options...)
 	})
-	return startWithConfiguration(context.Background(), os.LookupEnv, create, logging, monitoring, databases, caches, guarding, configurations, registrations...)
+	return startWithStore(store, context.Background(), os.LookupEnv, create, logging, monitoring, databases, caches, guarding, registrations...)
 }
 
 // middlewareOptions 保证监控包在治理外层，使被限流或熔断拒绝的调用也被计数。
@@ -71,11 +76,11 @@ func startWithResources(ctx context.Context, lookup func(string) (string, bool),
 
 // startWithSentinel 管理普通配置、数据源、规则监听、探针和 RPC，退出时先排空 RPC 再取消规则监听。
 func startWithSentinel(ctx context.Context, lookup func(string) (string, bool), create serverFactory, logging *Logging, monitoring *Monitoring, databases *Databasing, caches *Caching, guarding *Guarding, registrations ...Registration) (err error) {
-	return startWithConfiguration(ctx, lookup, create, logging, monitoring, databases, caches, guarding, nil, registrations...)
+	return startWithStore(config.NewStore(), ctx, lookup, create, logging, monitoring, databases, caches, guarding, registrations...)
 }
 
-// startWithConfiguration 将业务配置接到同一次配置加载中，再依序启动连接池、监控、治理和 RPC。
-func startWithConfiguration(ctx context.Context, lookup func(string) (string, bool), create serverFactory, logging *Logging, monitoring *Monitoring, databases *Databasing, caches *Caching, guarding *Guarding, configurations []*Configuration, registrations ...Registration) (err error) {
+// startWithStore 复用统一快照，依序初始化公共包、监控、治理和 RPC。
+func startWithStore(store *config.Store, ctx context.Context, lookup func(string) (string, bool), create serverFactory, logging *Logging, monitoring *Monitoring, databases *Databasing, caches *Caching, guarding *Guarding, registrations ...Registration) (err error) {
 	var configure func([]byte) error
 	var state *lifecycle.State
 	if logging != nil {
@@ -104,10 +109,7 @@ func startWithConfiguration(ctx context.Context, lookup func(string) (string, bo
 		}
 		defer release()
 	}
-	components, configErr := configurationComponents(configurations)
-	if configErr != nil {
-		return configErr
-	}
+	var components []config.Component
 	if databases != nil {
 		if databases.err != nil {
 			return databases.err
@@ -161,7 +163,14 @@ func startWithConfiguration(ctx context.Context, lookup func(string) (string, bo
 		}
 		settings.CloseConsul()
 	}()
-	settings, err = config.LoadWithComponents(ctx, lookup, configure, configureMonitor, components...)
+	identity, identityErr := config.ServiceName(lookup)
+	if identityErr != nil {
+		return identityErr
+	}
+	if identityErr = store.ValidateIdentity(identity); identityErr != nil {
+		return identityErr
+	}
+	settings, err = store.Apply(ctx, lookup, configure, configureMonitor, components...)
 	if err != nil {
 		return err
 	}

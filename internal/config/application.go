@@ -13,7 +13,12 @@ import (
 
 // loadApplication 按 imports 顺序加载单层引用，保留最终值及其覆盖信息。
 func loadApplication(ctx context.Context, key string, read func(context.Context, string) ([]byte, error)) (*applicationConfig, error) {
-	application, err := readDocument(ctx, key, read)
+	return loadApplicationLogged(ctx, key, read, klog.Infof)
+}
+
+// loadApplicationLogged 在统一加载器中暂存启动日志，避免业务预读时使用尚未配置的 logger。
+func loadApplicationLogged(ctx context.Context, key string, read func(context.Context, string) ([]byte, error), logf func(string, ...any)) (*applicationConfig, error) {
+	application, err := readDocumentLogged(ctx, key, read, logf)
 	if err != nil {
 		return nil, err
 	}
@@ -23,7 +28,7 @@ func loadApplication(ctx context.Context, key string, read func(context.Context,
 	}
 	merged := &applicationConfig{values: make(map[string]any), sources: make(map[string]*fieldSource)}
 	for _, importedKey := range imports {
-		fragment, err := readDocument(ctx, importedKey, read)
+		fragment, err := readDocumentLogged(ctx, importedKey, read, logf)
 		if err != nil {
 			return nil, err
 		}
@@ -33,13 +38,18 @@ func loadApplication(ctx context.Context, key string, read func(context.Context,
 		merge(merged.values, fragment, merged.sources, importedKey)
 	}
 	merge(merged.values, application, merged.sources, key)
-	klog.Infof("core: 配置文件合并完成：files=[%d] priority=[application.yaml 优先]", len(imports)+1)
+	logf("core: 配置文件合并完成：files=[%d] priority=[application.yaml 优先]", len(imports)+1)
 	return merged, nil
 }
 
 // readDocument 记录明确配置 Key 的读取及 YAML 解析阶段，不输出正文或配置值。
 func readDocument(ctx context.Context, key string, read func(context.Context, string) ([]byte, error)) (map[string]any, error) {
-	klog.Infof("core: 开始读取配置文件：key=[%s]", key)
+	return readDocumentLogged(ctx, key, read, klog.Infof)
+}
+
+// readDocumentLogged 只记录配置路径与读取结果，不记录配置值。
+func readDocumentLogged(ctx context.Context, key string, read func(context.Context, string) ([]byte, error), logf func(string, ...any)) (map[string]any, error) {
+	logf("core: 开始读取配置文件：key=[%s]", key)
 	body, err := read(ctx, key)
 	if err != nil {
 		return nil, err
@@ -48,7 +58,7 @@ func readDocument(ctx context.Context, key string, read func(context.Context, st
 	if err != nil {
 		return nil, fmt.Errorf("core: configuration %q: %w", key, err)
 	}
-	klog.Infof("core: 配置文件读取并解析成功：key=[%s]", key)
+	logf("core: 配置文件读取并解析成功：key=[%s]", key)
 	return document, nil
 }
 

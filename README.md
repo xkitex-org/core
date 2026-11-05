@@ -108,7 +108,7 @@ core/
   internal/startup/   # 注册、底层 Kitex 创建与运行
 ```
 
-根包公开 Server、WithService、WithLogger、WithMonitor、WithDatabase、Database、WithCache、Cache、WithSentinel，以及 ServerOption 和必要的 Monitor 接入协议。ServerOption 没有公开字段或方法，零值无效。公开 Handler 参数为 any，兼容注册函数接收 IDL 接口、应用传入具体指针的形式；错误类型会在启动前返回。internal 实现不能由外部业务项目直接导入。
+根包公开 Server、WithService、WithLogger、WithMonitor、WithDatabase、Database、WithCache、Cache、WithSentinel、Config，以及 ServerOption、Configuration 和必要的 Monitor 接入协议。ServerOption 没有公开字段或方法，零值无效。公开 Handler 参数为 any，兼容注册函数接收 IDL 接口、应用传入具体指针的形式；错误类型会在启动前返回。internal 实现不能由外部业务项目直接导入。
 
 ## 显式日志接入
 
@@ -279,6 +279,12 @@ SDK 的进程级采集与规则约束、初始数据及完整测试说明见相�
 该版本与 monitor、database、cache、sentinel 一起发布为 v0.0.1，业务使用正式模块依赖。
 
 
-## 业务配置下发
+## 统一业务配置
 
-`x.WithConfig("auth", handler.Configure)` 在同一次 Consul 读取与 imports 合并后，只将 auth 节单次传给回调。配置校验失败阻止 RPC 启动；回调不读取 Consul、不创建监听，不应记录配置正文。业务名称不可重复，也不能使用 imports、service、logging、monitor、database、cache、sentinel 保留节。回调只校验配置和构造业务对象，数据库与缓存句柄在请求执行时获取。
+`x.Config().Decode(&cfg)` 由 core 统一读取固定 Consul 入口和 imports，完成覆盖合并后映射到业务配置类型。构造配置视图不做 I/O；首次 Decode 或 Server 加载成功后，本轮启动复用同一只读快照，不重新读取 Consul。启动结束后，新一轮 Server 使用新快照。
+
+业务配置类型和校验集中在项目根目录 config；Handler、Service、Repository 不解析 YAML，不访问 Consul。Decode 返回独立对象，对象修改不会影响公共包或其他调用者。结构体只接收其声明的根配置节，并严格校验节内字段。
+
+业务先完成配置校验和对象构造，再调用 Server；公共包使用同一快照初始化。配置加载日志暂存到 logger 生效后按原顺序输出，仍统一使用 klog。身份在预读后变化会阻止启动。旧的 WithConfig 节名回调接口已删除。
+
+此配置 API 随本次 core v0.0.1 正式发布，业务通过正式模块依赖使用，不写 go.work 或 replace。

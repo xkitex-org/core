@@ -6,15 +6,14 @@ import (
 	"go.chaoxizhongzhi.com/xkitex/core/internal/startup"
 )
 
-// ServerOption 是由 WithService、WithLogger、WithMonitor、WithDatabase、WithCache 、WithSentinel 或 WithConfig 创建的启动选项，零值无效。
+// ServerOption 是由 WithService、WithLogger、WithMonitor、WithDatabase、WithCache 或 WithSentinel 创建的启动选项，零值无效。
 type ServerOption struct {
-	registration  startup.Registration
-	logging       *startup.Logging
-	monitor       *startup.Monitoring
-	database      *startup.Databasing
-	cache         *startup.Caching
-	sentinel      *startup.Guarding
-	configuration *startup.Configuration
+	registration startup.Registration
+	logging      *startup.Logging
+	monitor      *startup.Monitoring
+	database     *startup.Databasing
+	cache        *startup.Caching
+	sentinel     *startup.Guarding
 }
 
 // Server 校验服务身份并从固定 Consul Key 读取配置后，按顺序注册所有 Service。
@@ -28,7 +27,6 @@ func Server(options ...ServerOption) error {
 	var databases *startup.Databasing
 	var caches *startup.Caching
 	var guarding *startup.Guarding
-	var configurations []*startup.Configuration
 	for _, option := range options {
 		if option.logging != nil {
 			if logging != nil {
@@ -40,8 +38,6 @@ func Server(options ...ServerOption) error {
 				return errors.New("core: WithMonitor may only be specified once")
 			}
 			monitoring = option.monitor
-		} else if option.configuration != nil {
-			configurations = append(configurations, option.configuration)
 		} else if option.database != nil {
 			if databases != nil {
 				return errors.New("core: WithDatabase may only be specified once")
@@ -61,5 +57,5 @@ func Server(options ...ServerOption) error {
 			registrations = append(registrations, option.registration)
 		}
 	}
-	return startup.Run(logging, monitoring, databases, caches, guarding, configurations, registrations...)
+	return startup.Run(logging, monitoring, databases, caches, guarding, registrations...)
 }
