@@ -258,9 +258,11 @@ err := x.Server(
 )
 ```
 
+默认为 `config/<group>/<name>/sentinel`，与主配置 `config/<group>/<name>/application.yaml` 同目录。可省略 `sentinel` 配置节。已有规则使用其他目录时，可用 `sentinel.rule_prefix` 覆盖默认值：
+
 ```yaml
 sentinel:
-  rule_prefix: config/zmall/product/sentinel
+  rule_prefix: config/zmall/shared/sentinel
 ```
 
 四个 Key 都必须存在，没有规则时写入 []；初始读取或校验失败阻止 RPC 启动。运行中网络错误、ACL 故障、删除 Key 和非法内容保留上一版有效规则，明确写 [] 才清空该类保护。规则监听不改变普通配置或既有 monitor 就绪依据。

@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -19,6 +20,7 @@ import (
 	"go.chaoxizhongzhi.com/xkitex/core/internal/config"
 	"go.chaoxizhongzhi.com/xkitex/core/internal/lifecycle"
 	"go.chaoxizhongzhi.com/xkitex/database"
+	"go.chaoxizhongzhi.com/xkitex/sentinel"
 )
 
 const sentinelApplication = "sentinel:\n  rule_prefix: config/demo/api/sentinel\n"
@@ -156,5 +158,67 @@ func TestSentinelBindingRejectsReuseWithoutClosingOwner(t *testing.T) {
 	}, nil, nil, nil, nil, NewSentinel(g))
 	if err == nil || g.closed != 0 || len(order) != 0 {
 		t.Fatalf("duplicate owner damaged active controller: %v %v", err, order)
+	}
+}
+
+func TestSentinelRulePrefixDefaultsToApplicationDirectory(t *testing.T) {
+	for _, tt := range []struct {
+		name, application, prefix string
+	}{
+		{"omitted", "{}\n", "config/demo/api/sentinel"},
+		{"empty section", "sentinel: {}\n", "config/demo/api/sentinel"},
+		{"explicit override", "sentinel: {rule_prefix: config/shared/sentinel}\n", "config/shared/sentinel"},
+		{"imported override", "imports: [config/shared/application.yaml]\n", "config/shared/sentinel"},
+		{"invalid explicit value", "sentinel: {rule_prefix: ''}\n", ""},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var reads sync.Map
+			consul := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				key := strings.TrimPrefix(r.URL.Path, "/v1/kv/")
+				var body string
+				switch {
+				case key == "config/demo/api/application.yaml":
+					body = tt.application
+				case key == "config/shared/application.yaml":
+					body = "sentinel: {rule_prefix: config/shared/sentinel}\n"
+				case tt.prefix != "" && strings.HasPrefix(key, tt.prefix+"/"):
+					reads.Store(key, true)
+					body = "[]"
+				default:
+					t.Errorf("unexpected Consul Key: %s", key)
+					w.WriteHeader(http.StatusNotFound)
+					return
+				}
+				w.Header().Set("X-Consul-Index", "1")
+				_ = json.NewEncoder(w).Encode([]map[string]any{{"Key": key, "Value": []byte(body)}})
+			}))
+			t.Cleanup(consul.Close)
+			registration := NewRegistration(func(s server.Server, h *int, _ ...server.RegisterOption) error {
+				return s.RegisterService(&serviceinfo.ServiceInfo{ServiceName: "Product"}, h)
+			}, new(int))
+			created := false
+			err := startWithSentinel(context.Background(), configEnvironment(consul.URL), func(_ context.Context, settings config.Settings, _ *lifecycle.State, _ <-chan error) server.Server {
+				created = true
+				if settings.ServiceName != "demo-api" {
+					t.Errorf("unexpected service name: %s", settings.ServiceName)
+				}
+				return &fakeServer{services: map[string]*serviceinfo.ServiceInfo{}}
+			}, nil, nil, nil, nil, NewSentinel(sentinel.New()), registration)
+			if tt.prefix == "" {
+				if err == nil || created || !strings.Contains(err.Error(), "rule_prefix") {
+					t.Fatalf("invalid explicit prefix must stop startup, got %v", err)
+				}
+				return
+			}
+			if err != nil || !created {
+				t.Fatalf("startup failed: %v", err)
+			}
+			for _, kind := range []string{"flow", "circuitBreaker", "isolation", "system"} {
+				key := tt.prefix + "/" + kind
+				if _, ok := reads.Load(key); !ok {
+					t.Errorf("rule not read: %s", key)
+				}
+			}
+		})
 	}
 }

@@ -81,7 +81,12 @@ func readSnapshot(ctx context.Context, lookup func(string) (string, bool), logf 
 	if err != nil {
 		return nil, fmt.Errorf("core: 合并配置编码失败")
 	}
-	return &snapshot{settings: Settings{ServiceName: id.name, Port: port, consul: reader}, application: application, body: body}, nil
+	return &snapshot{
+		entryKey:    id.key,
+		settings:    Settings{ServiceName: id.name, Port: port, consul: reader},
+		application: application,
+		body:        body,
+	}, nil
 }
 
 // consulEndpoint 读取并校验 Consul 地址，未声明协议时使用 HTTP。

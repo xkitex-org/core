@@ -5,6 +5,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
+	"path"
 	"reflect"
 	"strings"
 	"sync"
@@ -21,6 +23,7 @@ type event struct {
 
 // snapshot 保存进程内唯一的合并配置和同一 Consul 客户端，字段均不向业务公开。
 type snapshot struct {
+	entryKey    string
 	settings    Settings
 	application *applicationConfig
 	body        []byte
@@ -68,8 +71,22 @@ func (s *Store) Apply(ctx context.Context, lookup func(string) (string, bool), l
 		if component.Configure == nil {
 			return nil
 		}
+		data, exists := value.application.values[component.Name]
+		if component.Name == "sentinel" {
+			if !exists {
+				data, exists = map[string]any{}, true
+			}
+			if section, ok := data.(map[string]any); ok {
+				if _, explicit := section["rule_prefix"]; !explicit {
+					// Apply the default only to Sentinel's copy of the merged configuration.
+					section = maps.Clone(section)
+					section["rule_prefix"] = path.Join(path.Dir(value.entryKey), "sentinel")
+					data = section
+				}
+			}
+		}
 		var body []byte
-		if data, ok := value.application.values[component.Name]; ok {
+		if exists {
 			body, err = yaml.Marshal(data)
 			if err != nil {
 				return errors.New("core: 组件配置编码失败")
