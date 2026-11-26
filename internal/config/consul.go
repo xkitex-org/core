@@ -15,7 +15,6 @@ import (
 type consulReader struct {
 	client    *api.Client
 	token     string
-	config    *api.Config
 	transport *http.Transport
 }
 
@@ -39,7 +38,7 @@ func newConsulReader(endpoint *url.URL, token string) (*consulReader, func(), er
 		transport.CloseIdleConnections()
 		return nil, nil, fmt.Errorf("core: create Consul configuration client failed")
 	}
-	return &consulReader{client: client, token: token, config: configuration, transport: transport}, transport.CloseIdleConnections, nil
+	return &consulReader{client: client, token: token, transport: transport}, transport.CloseIdleConnections, nil
 }
 
 // read 单次读取明确的 KV Key，失败时不返回配置正文或 SDK 响应正文。
@@ -78,21 +77,19 @@ func (s Settings) ConsulClient() *api.Client {
 	return s.consul.client
 }
 
-// RegistryClient 从同一连接参数派生第三方客户端，包装传输层以回收库内心跳并隐藏错误正文。
-func (s Settings) RegistryClient(wrap func(http.RoundTripper) http.RoundTripper) (*api.Client, error) {
-	if s.consul == nil {
-		return nil, fmt.Errorf("core: Consul connection is unavailable")
+// ConsulAgent 返回用于所有实例注册操作的固定 Agent 客户端。
+func (s Settings) ConsulAgent() *api.Client {
+	if s.agent == nil {
+		return nil
 	}
-	configuration := *s.consul.config
-	client := *configuration.HttpClient
-	client.Timeout = 3 * time.Second
-	client.Transport = wrap(client.Transport)
-	configuration.HttpClient = &client
-	return api.NewClient(&configuration)
+	return s.agent.client
 }
 
 // CloseConsul 在所有注册和检查任务结束后释放该实例使用的连接池。
 func (s Settings) CloseConsul() {
+	if s.agent != nil && s.agent != s.consul {
+		s.agent.transport.CloseIdleConnections()
+	}
 	if s.consul != nil {
 		s.consul.transport.CloseIdleConnections()
 	}

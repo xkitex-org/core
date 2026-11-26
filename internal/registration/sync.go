@@ -50,10 +50,10 @@ func (c *Controller) synchronize() error {
 	if c.state.Phase() != string(lifecycle.Running) {
 		return nil
 	}
-	// 补充较短周期续约，保留 TTL 余量；第三方自带心跳仍只维护同一个心跳检查。
+	// 定期续约独立心跳，保留 TTL 余量。
 	if err := c.update(c.heartbeatID, api.HealthPassing); err != nil {
 		if statusCode(err) == http.StatusNotFound {
-			if err := c.verifyExisting(true); err != nil {
+			if _, err := c.findInstance(true); err != nil {
 				return err
 			}
 			if err := c.bootstrap(); err != nil {
@@ -79,7 +79,7 @@ func (c *Controller) synchronize() error {
 	}
 	if err := c.update(c.readinessID, status); err != nil {
 		if statusCode(err) == http.StatusNotFound {
-			if err := c.verifyExisting(true); err != nil {
+			if _, err := c.findInstance(true); err != nil {
 				return err
 			}
 			if err := c.bootstrap(); err != nil {

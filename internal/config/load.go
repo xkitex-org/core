@@ -19,6 +19,7 @@ type Settings struct {
 	ServiceName string
 	Port        int
 	consul      *consulReader
+	agent       *consulReader
 }
 
 // Load 在启动时读取固定入口及其引用配置，合并校验后返回服务启动参数。
@@ -51,9 +52,17 @@ func readSnapshot(ctx context.Context, lookup func(string) (string, bool), logf 
 	if err != nil {
 		return nil, err
 	}
-	endpoint, err := consulEndpoint(lookup)
+	rawEndpoint, _ := lookup("X_CONSUL_ADDR")
+	endpoint, err := consulEndpoint("X_CONSUL_ADDR", rawEndpoint)
 	if err != nil {
 		return nil, err
+	}
+	agentEndpoint := endpoint
+	if raw, _ := lookup("X_CONSUL_AGENT_ADDR"); strings.TrimSpace(raw) != "" {
+		agentEndpoint, err = consulEndpoint("X_CONSUL_AGENT_ADDR", raw)
+		if err != nil {
+			return nil, err
+		}
 	}
 	rawToken, _ := lookup("X_CONSUL_TOKEN")
 	token := strings.TrimSpace(rawToken)
@@ -81,30 +90,37 @@ func readSnapshot(ctx context.Context, lookup func(string) (string, bool), logf 
 	if err != nil {
 		return nil, fmt.Errorf("core: 合并配置编码失败")
 	}
+	agent := reader
+	if agentEndpoint.Host != endpoint.Host || agentEndpoint.Scheme != endpoint.Scheme {
+		agent, _, err = newConsulReader(agentEndpoint, token)
+		if err != nil {
+			return nil, err
+		}
+	}
+	logf("core: Consul 实例登记端点：service=[%s] agent=[%s://%s]", id.name, agentEndpoint.Scheme, agentEndpoint.Host)
 	return &snapshot{
 		entryKey:    id.key,
-		settings:    Settings{ServiceName: id.name, Port: port, consul: reader},
+		settings:    Settings{ServiceName: id.name, Port: port, consul: reader, agent: agent},
 		application: application,
 		body:        body,
 	}, nil
 }
 
 // consulEndpoint 读取并校验 Consul 地址，未声明协议时使用 HTTP。
-func consulEndpoint(lookup func(string) (string, bool)) (*url.URL, error) {
-	raw, _ := lookup("X_CONSUL_ADDR")
+func consulEndpoint(key, raw string) (*url.URL, error) {
 	address := strings.TrimSpace(raw)
 	if address == "" {
-		return nil, fmt.Errorf("core: X_CONSUL_ADDR is required")
+		return nil, fmt.Errorf("core: %s is required", key)
 	}
 	if !strings.Contains(address, "://") {
 		address = "http://" + address
 	}
 	endpoint, err := url.Parse(address)
 	if err != nil || endpoint.Hostname() == "" || (endpoint.Scheme != "http" && endpoint.Scheme != "https") {
-		return nil, fmt.Errorf("core: X_CONSUL_ADDR must be an HTTP(S) Consul address")
+		return nil, fmt.Errorf("core: %s must be an HTTP(S) Consul address", key)
 	}
-	if endpoint.User != nil || (endpoint.Path != "" && endpoint.Path != "/") || endpoint.RawQuery != "" || endpoint.Fragment != "" || endpoint.Opaque != "" {
-		return nil, fmt.Errorf("core: X_CONSUL_ADDR must not contain credentials, a path, query or fragment")
+	if endpoint.User != nil || (endpoint.Path != "" && endpoint.Path != "/") || endpoint.ForceQuery || endpoint.RawQuery != "" || strings.Contains(address, "#") || endpoint.Opaque != "" {
+		return nil, fmt.Errorf("core: %s must not contain credentials, a path, query or fragment", key)
 	}
 	return endpoint, nil
 }

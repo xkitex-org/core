@@ -107,12 +107,12 @@ func TestRequiredEnvironmentAndPathValidationBeforeHTTP(t *testing.T) {
 // TestConsulAddressValidation 验证 Consul 地址格式及错误信息的凭据脱敏。
 func TestConsulAddressValidation(t *testing.T) {
 	for _, address := range []string{"http://127.0.0.1:8500", "127.0.0.1:8500", "https://consul.internal:8501/"} {
-		if _, err := consulEndpoint(lookup(environment(address))); err != nil {
+		if _, err := consulEndpoint("X_CONSUL_ADDR", address); err != nil {
 			t.Fatalf("valid Consul address rejected: %v", err)
 		}
 	}
 	for _, address := range []string{"ftp://host:8500", "http://", "http://host/config", "http://host?x=y", "http://host/#fragment", "http://user:secret-value@host"} {
-		if _, err := consulEndpoint(lookup(environment(address))); err == nil || strings.Contains(err.Error(), "secret-value") {
+		if _, err := consulEndpoint("X_CONSUL_ADDR", address); err == nil || strings.Contains(err.Error(), "secret-value") {
 			t.Fatalf("invalid address accepted or exposed: %v", err)
 		}
 	}

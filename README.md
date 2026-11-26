@@ -19,12 +19,14 @@ err := x.Server(
 export X_SERVICE_GROUP=zmall
 export X_SERVICE_NAME=product
 export X_CONSUL_ADDR=127.0.0.1:8500
-export X_CONSUL_TOKEN='<具有入口和全部引用 Key 读取权限的 ACL Token>'
+export X_CONSUL_TOKEN='<具有配置 Key 读取及本服务写入权限的 ACL Token>'
 ```
 
 GROUP 和 NAME 去除首尾空白后不能为空，以字母或数字开头，仅允许字母、数字、点、下划线和连字符，拒绝路径分隔符或目录跳转。应用服务名固定为 `GROUP-NAME`；示例为 `zmall-product`，不从 YAML 的 service.name 读取，也不改变 IDL Service 名。
 
 使用官方 `github.com/hashicorp/consul/api` SDK，固定从 Consul KV `config/GROUP/NAME/application.yaml` 读取全局配置，示例为 `config/zmall/product/application.yaml`。不使用 X_CONFIG_KEY，不回退到本地文件或其他 Key。X_CONSUL_ADDR 支持 host:port（默认 HTTP）或完整 HTTP(S) 地址；不能包含账号密码、路径、查询参数或片段。Token 仅作为请求头发送。
+
+可选的 `X_CONSUL_AGENT_ADDR` 使用相同地址格式，指定唯一的 Consul Agent，注册、健康续约、维护和注销始终使用这个地址。未配置时使用 `X_CONSUL_ADDR`，此时该地址必须直连单个 Agent。若 KV 地址是转发到多个 Agent 的 Service、代理或 DNS 记录，须为 `X_CONSUL_AGENT_ADDR` 单独填入固定节点地址，例如 `http://consul-server-0.consul-server.consul-system.svc.cluster.local:8500`。两个端点使用同一 ACL Token。
 
 KV Value 是一个 YAML 对象，例如：
 
@@ -89,7 +91,7 @@ Consul ACL 可让研发只修改入口、由管理员维护共享文件；应用
 
 读取并校验成功后，core 把应用服务名和监听端口交给 Kitex，再执行业务注册和启动。当前不增加平台校验或配置热更新。
 
-服务注册使用 `github.com/kitex-contrib/registry-consul` v0.2.0，客户端发现接入继续延后；服务治理后续接入 Sentinel，当前不引入 `config-consul`。官方 Consul SDK 固定为 v1.34.1，Go 最低版本为 1.25.9。
+服务注册使用官方 Consul SDK，客户端发现接入继续延后；服务治理后续接入 Sentinel，当前不引入 `config-consul`。官方 Consul SDK 固定为 v1.34.1，Go 最低版本为 1.25.9。
 
 ## 注册与包边界
 
@@ -178,7 +180,7 @@ x.Server(
 )
 ```
 
-一个 Server 在 Consul 中登记一个 `GROUP-NAME` 应用实例，多个 IDL Service 共用它。实例 ID 沿用 registry-consul 的 `服务名:IP:RPC端口` 格式，登记 RPC 端口而非 HTTP 探针端口。通配监听地址会选择本机非回环 IPv4，日志输出实际登记地址；当前不增加广告地址配置，调用方必须能够访问该地址。
+一个 Server 在 Consul 中登记一个 `GROUP-NAME` 应用实例，多个 IDL Service 共用它。实例 ID 沿用 `服务名:IP:RPC端口` 格式，登记 RPC 端口而非 HTTP 探针端口。通配监听地址会选择本机非回环 IPv4，日志输出实际登记地址；当前不增加广告地址配置，调用方必须能够访问该地址。
 
 | 条件 | Consul 服务检查 |
 | --- | --- |
@@ -188,15 +190,15 @@ x.Server(
 | startup 完成且 readiness 通过 | 独立 readiness 检查变为 passing |
 | readiness 失败或恢复 | 同一检查在 critical/passing 间切换 |
 | 正常停机 | 停止续约、进入维护状态、注销，再排空 RPC |
-| 进程无法续约 | TTL 到期变为 critical，保留记录 |
+| 进程无法续约 | 心跳 TTL 到期变为 critical，持续 2 分钟后由 Consul 自动注销 |
 
-registry-consul 负责最终登记、注销及实例心跳；SDK 在首次登记时原子创建初始检查。心跳与 readiness 使用不同的 TTL 检查 ID，每次启动生成新的检查 ID，旧心跳不能更新新检查。接 monitor 时，SDK 创建 critical 的 readiness 检查，后续第三方登记保留它，不存在先可用再撤销的初始窗口。空的 `monitor.New()` 没有业务检查，进入 Running 后会很快通过；liveness 不直接控制 Consul 就绪状态。
+core 通过同一个 Agent 原子登记初始检查、续约和注销。心跳与 readiness 使用不同的 TTL 检查 ID，每次启动生成新的检查 ID，旧心跳不能更新新检查。接 monitor 时，SDK 创建初始状态为 critical 的 readiness 检查，首次发现前即执行就绪门控。空的 `monitor.New()` 没有业务检查，进入 Running 后会很快通过；liveness 不直接控制 Consul 就绪状态。
 
-TTL 默认 15 秒，core 每 5 秒补充续约；状态变化立即唤醒同步任务。任务按实例串行处理并读取最新状态，探针不等待网络请求。同步失败后重试，远端成功才输出就绪同步成功日志，不把本地检查通过当作 Consul 已经更新。Agent 丢失登记时先重建初始检查再应用最新状态；不会因 readiness 长期失败自动删除实例。
+TTL 默认 15 秒，core 每 5 秒续约；状态变化立即唤醒同步任务。任务按实例串行处理并读取最新状态，探针不等待网络请求。同步失败后重试，远端成功才输出就绪同步成功日志，不把本地检查通过当作 Consul 已经更新。同一 Agent 丢失登记时先重建初始检查再应用最新状态。自动注销仅绑定心跳检查，readiness 长期失败时实例仍可恢复。Consul 周期执行清理，实际注销时间可能晚于 2 分钟阈值。
 
 实例带有 `xkitex.managed` 和 `xkitex.owner` 标签。core 独占管理该实例的检查集合，启动时原子替换本实例遗留检查，避免上一次接 monitor、本次不接而被旧检查卡住；非 core 管理的同 ID 实例会拒绝覆盖。不得在 core 管理的实例上额外挂载需要跨重启保留的检查；其他实例不受影响。
 
-正常停机先锁定不可恢复的 Stopping 状态，再启用 Consul 维护模式，防止第三方心跳重新放行，随后由 registry-consul 注销。未确认注销成功时返回错误，远端租约会在停止续约后到期。所有请求有超时，第三方错误响应正文不进入日志。registry-consul v0.2.0 没有独立 Close，且只在注销成功后取消内部心跳；内部适配在真实清理后停止外部请求，并仅在本地完成其取消流程。这个本地收尾结果不代表远端注销成功，也不会覆盖真实错误。
+正常停机先停止续约，再通过登记所在 Agent 启用维护模式并注销实例。未确认注销成功时返回错误，由心跳超时回收。所有请求均设置超时，错误日志省略服务端响应正文。
 
 本轮只接入服务注册，没有增加客户端封装、管理平台校验或服务治理。注册实现位于 `internal/registration`，根包没有新增公开方法。
 

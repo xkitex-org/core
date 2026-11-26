@@ -5,7 +5,6 @@ go 1.25.9
 require (
 	github.com/cloudwego/kitex v0.16.4
 	github.com/hashicorp/consul/api v1.34.1
-	github.com/kitex-contrib/registry-consul v0.2.0
 	go.chaoxizhongzhi.com/xkitex/cache v0.0.1
 	go.chaoxizhongzhi.com/xkitex/database v0.0.1
 	go.chaoxizhongzhi.com/xkitex/sentinel v0.0.1

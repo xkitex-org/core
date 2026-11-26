@@ -9,7 +9,7 @@ import (
 	"github.com/cloudwego/kitex/pkg/registry"
 )
 
-// instanceInfo 将实际监听地址固定为单个实例地址，使 SDK 与 registry-consul 使用同一实例 ID。
+// instanceInfo 将实际监听地址固定为单个实例地址，保留既有服务实例 ID 格式。
 func instanceInfo(source *registry.Info, name, owner string) (*registry.Info, string, error) {
 	if source == nil || source.Addr == nil || source.ServiceName != name {
 		return nil, "", fmt.Errorf("core: invalid Consul instance registration")

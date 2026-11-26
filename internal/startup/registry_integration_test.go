@@ -150,7 +150,7 @@ func TestManagedServerRegistrationAndMultipleRPC(t *testing.T) {
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		mu.Lock()
-		registered := registrations == 2 && p.phase() == "Running"
+		registered := registrations == 1 && p.phase() == "Running"
 		isReady := ready
 		mu.Unlock()
 		if registered {

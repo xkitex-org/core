@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -159,10 +158,13 @@ func (a *fakeAgent) serve(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// fixture 通过真实配置加载建立注册实例，确保 SDK 和第三方使用相同端点及 ACL。
-func fixture(t *testing.T, a *fakeAgent, gated bool) (*Controller, *registry.Info) {
+// fixture 通过真实配置加载建立注册实例，确保注册使用实际配置和 ACL。
+func fixture(t *testing.T, a *fakeAgent, gated bool, agentAddress ...string) (*Controller, *registry.Info) {
 	t.Helper()
 	values := map[string]string{"X_SERVICE_GROUP": "zmall", "X_SERVICE_NAME": "product", "X_CONSUL_ADDR": a.server.URL, "X_CONSUL_TOKEN": "registry-test-token"}
+	if len(agentAddress) != 0 {
+		values["X_CONSUL_AGENT_ADDR"] = agentAddress[0]
+	}
 	settings, err := config.Load(context.Background(), func(key string) (string, bool) { value, ok := values[key]; return value, ok })
 	if err != nil {
 		t.Fatal(err)
@@ -248,6 +250,40 @@ func TestReadinessGateRecoveryAndLateResults(t *testing.T) {
 	}
 }
 
+// TestRegistrationUsesOnlyConfiguredAgent 同时验证分离 KV 端点及整个实例生命周期的固定 Agent。
+func TestRegistrationUsesOnlyConfiguredAgent(t *testing.T) {
+	kv := newAgent(t)
+	agent := newAgent(t)
+	c, info := fixture(t, kv, true, agent.server.URL)
+	if err := c.Register(info); err != nil {
+		t.Fatal(err)
+	}
+	c.state.Report(true, true)
+	eventually(t, agent.snapshot)
+
+	agent.mu.Lock()
+	heartbeat := agent.checks[c.heartbeatID]
+	readiness := agent.checks[c.readinessID]
+	validChecks := agent.registrationCalls == 1 && heartbeat != nil && readiness != nil &&
+		heartbeat.DeregisterCriticalServiceAfter == "2m0s" && readiness.DeregisterCriticalServiceAfter == ""
+	agent.mu.Unlock()
+	if !validChecks {
+		t.Fatal("expected one registration and automatic deregistration only on the heartbeat")
+	}
+	if err := c.Deregister(info); err != nil {
+		t.Fatal(err)
+	}
+	agent.mu.Lock()
+	removed := agent.service == nil && !agent.badAuth
+	agent.mu.Unlock()
+	kv.mu.Lock()
+	kvOnly := kv.requests == 1 && !kv.badAuth && len(kv.events) == 0
+	kv.mu.Unlock()
+	if !removed || !kvOnly {
+		t.Fatal("agent lifecycle touched the KV endpoint or did not remove the service")
+	}
+}
+
 // TestStaleMonitorChecksAreReplaced 验证上一轮带探针的检查不会影响本轮不带探针实例。
 func TestStaleMonitorChecksAreReplaced(t *testing.T) {
 	a := newAgent(t)
@@ -266,22 +302,18 @@ func TestStaleMonitorChecksAreReplaced(t *testing.T) {
 
 // TestRegistrationFailureRollsBackAndRedacts 验证服务端已提交但返回错误时仍清理实例，并隐藏响应正文。
 func TestRegistrationFailureRollsBackAndRedacts(t *testing.T) {
-	for _, step := range []int{1, 2} {
-		t.Run(fmt.Sprint(step), func(t *testing.T) {
-			a := newAgent(t)
-			c, info := fixture(t, a, true)
-			a.failRegistration = step
-			a.commitFailedRegistration = true
-			err := c.Register(info)
-			if err == nil || strings.Contains(err.Error(), "private-response-token") || c.state.Phase() != "Failed" {
-				t.Fatalf("unsafe registration result: %v", err)
-			}
-			a.mu.Lock()
-			defer a.mu.Unlock()
-			if a.service != nil {
-				t.Fatal("partial registration was retained")
-			}
-		})
+	a := newAgent(t)
+	c, info := fixture(t, a, true)
+	a.failRegistration = 1
+	a.commitFailedRegistration = true
+	err := c.Register(info)
+	if err == nil || strings.Contains(err.Error(), "private-response-token") || c.state.Phase() != "Failed" {
+		t.Fatalf("unsafe registration result: %v", err)
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.service != nil {
+		t.Fatal("partial registration was retained")
 	}
 }
 
@@ -322,7 +354,7 @@ func TestAgentRestartRebuildsCriticalGate(t *testing.T) {
 	}
 }
 
-// logOutput 支持第三方心跳和测试同时访问日志缓冲。
+// logOutput 支持心跳和测试同时访问日志缓冲。
 type logOutput struct {
 	mu   sync.Mutex
 	body bytes.Buffer
@@ -338,7 +370,7 @@ func (o *logOutput) Write(body []byte) (int, error) {
 // String 返回受保护的日志快照。
 func (o *logOutput) String() string { o.mu.Lock(); defer o.mu.Unlock(); return o.body.String() }
 
-// TestUnavailableAgentStillStopsLocalHeartbeat 验证注销无法确认时保留错误，并停止第三方心跳的外部请求。
+// TestUnavailableAgentStillStopsLocalHeartbeat 验证注销无法确认时保留错误，并停止心跳的外部请求。
 func TestUnavailableAgentStillStopsLocalHeartbeat(t *testing.T) {
 	var output logOutput
 	klog.SetOutput(&output)
